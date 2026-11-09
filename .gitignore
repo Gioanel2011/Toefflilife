@@ -1,0 +1,8 @@
+# Roblox Studio / Rojo lock files (machine-specific)
+build/*.lock
+*.rbxlx.lock
+*.rbxl.lock
+
+# OS/editor noise
+Thumbs.db
+.DS_Store

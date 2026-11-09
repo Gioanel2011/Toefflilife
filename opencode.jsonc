@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".opencode/rules.md"],
+  "mcp": {
+    "servers": {
+      "filesystem": {
+        "type": "local",
+        "command": [
+          "npx.cmd",
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "."
+        ],
+        "cwd": "."
+      },
+      "web-fetch": {
+        "type": "local",
+        "command": ["uvx", "mcp-server-fetch"],
+        "cwd": ".",
+        "environment": {
+          "PYTHONIOENCODING": "utf-8"
+        }
+      },
+      "Roblox_Studio": {
+        "type": "local",
+        "command": ["cmd.exe", "/c", "%LOCALAPPDATA%\\Roblox\\mcp.bat"]
+      }
+    }
+  }
+}
