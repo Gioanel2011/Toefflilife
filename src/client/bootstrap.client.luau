@@ -12,7 +12,7 @@ local RemoteProtocol = require(Shared:WaitForChild("net"):WaitForChild("RemotePr
 
 local ClientRoot = script.Parent
 local BicycleController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("BicycleController"))
-local MopedController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("MopedController"))
+local MopedMountController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("MopedMountController"))
 local GrassController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("GrassController"))
 local ShopTerminal = require(ClientRoot:WaitForChild("ui"):WaitForChild("ShopTerminal"))
 local DeliveryPrompt = require(ClientRoot:WaitForChild("ui"):WaitForChild("DeliveryPrompt"))
@@ -22,6 +22,7 @@ local bicycleController = BicycleController.new()
 local grassController = GrassController.new()
 
 local deliveryPrompt: any = nil
+local mopedMountController: any = nil
 
 local connections: { RBXScriptConnection } = {}
 
@@ -75,19 +76,17 @@ local function requestViaRouter(netFolder: Folder, action: string, payload: any)
 	return nil
 end
 
--- 2-4. Controller mit serverseitig gelieferten Fahrzeugwerten starten.
+-- 2-4. Controller starten. Mofa-Fahrwerte kommen aus den serverseitig
+-- gesetzten Attributen des gespawnten Modells.
 local function setupControllers(netFolder: Folder): ()
-	-- Fahrzeugauswahl und Werte kommen ausschliesslich vom Server.
-	local vehicleSnapshot = requestViaRouter(netFolder, "VehicleSelect", { action = "getActive" })
-	callOptional(MopedController, "init", {
-		remotes = netFolder,
-		vehicle = vehicleSnapshot,
-		onFuelEmpty = function()
+	mopedMountController = MopedMountController.new({
+		bicycle = bicycleController,
+		onOutOfFuel = function()
 			requestViaRouter(netFolder, "FuelRefill", { action = "requestRescue" })
 		end,
 	})
 	bicycleController:Start()
-	callOptional(MopedController, "start")
+	mopedMountController:Start()
 	grassController:Start()
 end
 
@@ -134,7 +133,9 @@ end
 local function onCharacterAdded(character: Model): ()
 	-- Spawn: Controller an neuem Charakter einhängen, UI-Zustand zurücksetzen.
 	bicycleController:OnCharacterAdded(character)
-	callOptional(MopedController, "onCharacterAdded", character)
+	if mopedMountController ~= nil then
+		mopedMountController:OnCharacterAdded(character)
+	end
 	callOptional(ShopTerminal, "onCharacterAdded", character)
 	if deliveryPrompt ~= nil then
 		callOptional(deliveryPrompt, "onCharacterAdded", character)
@@ -162,7 +163,9 @@ local function shutdown(): ()
 	if deliveryPrompt ~= nil then
 		callOptional(deliveryPrompt, "destroy")
 	end
-	callOptional(MopedController, "stop")
+	if mopedMountController ~= nil then
+		mopedMountController:Stop()
+	end
 	grassController:Stop()
 	bicycleController:Stop()
 end

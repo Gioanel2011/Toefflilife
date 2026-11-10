@@ -4,7 +4,13 @@
 -- Nur Name und Anker-Attribut variieren; alle Abmessungen, Materialien, Farben
 -- und die Teilezahl sind deterministisch identisch.
 
+local BuildingPlacement = require(script.Parent.BuildingPlacement)
+
 local GarageFactory = {}
+
+-- Einheitlicher Vergroesserungsfaktor fuer alle Garagen (moderat, damit die
+-- reservierten Abstaende zu Strassen und Nachbarn erhalten bleiben).
+GarageFactory.SCALE = 1.4
 
 local FLOOR_COLOR = Color3.fromRGB(145, 145, 150)
 local WALL_COLOR = Color3.fromRGB(205, 205, 212)
@@ -227,6 +233,10 @@ function GarageFactory.create(anchorName: string): Model
 	workshopAnchor:SetAttribute("WorkshopAnchor", true)
 
 	model.PrimaryPart = floor
+
+	-- Einheitlich vergroessern und Basis exakt auf den lokalen Ursprung legen.
+	BuildingPlacement.scale(model, GarageFactory.SCALE)
+	BuildingPlacement.ground(model, 0)
 
 	return model
 end

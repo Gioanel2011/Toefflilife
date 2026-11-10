@@ -21,6 +21,7 @@ local WorldLayout = requireSibling("WorldLayout")
 local TerrainBuilder = requireSibling("TerrainBuilder")
 local WaterBuilder = requireSibling("WaterBuilder")
 local RoadBuilder = requireSibling("RoadBuilder")
+local RoadPainter = requireSibling("RoadPainter")
 local IntersectionBuilder = requireSibling("IntersectionBuilder")
 local BridgeBuilder = requireSibling("BridgeBuilder")
 local TrafficSignPlacer = requireSibling("TrafficSignPlacer")
@@ -32,6 +33,7 @@ local VegetationBuilder = requireSibling("VegetationBuilder")
 local GrassFieldBuilder = requireSibling("GrassFieldBuilder")
 local AtmosphereBuilder = requireSibling("AtmosphereBuilder")
 local GarageWorldBuilder = requireSibling("GarageWorldBuilder")
+local SpawnBuilder = requireSibling("SpawnBuilder")
 
 ValleyWorld.MAX_PLAYERS = 15
 
@@ -98,6 +100,9 @@ local function buildWorld(root: Instance): ()
 
 	WaterBuilder.build(root)
 
+	-- Asphalt buendig in die oberste Terrainvoxel malen (keine schwebenden Parts).
+	RoadPainter.paint(workspace.Terrain)
+
 	RoadBuilder.build(root)
 	IntersectionBuilder.build(root)
 	BridgeBuilder.build(root)
@@ -114,6 +119,9 @@ local function buildWorld(root: Instance): ()
 	PastureBuilder.build(root)
 
 	TrafficSignPlacer.build(root)
+
+	-- Start-Spawn zuletzt: die Bodenhoehe ist dann bereits endgueltig.
+	SpawnBuilder.build(root)
 
 	AtmosphereBuilder.apply()
 end

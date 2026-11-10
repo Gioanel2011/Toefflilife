@@ -3,6 +3,8 @@
 -- Randbergen, See- und Bachbetten. Nutzt die Roblox-Terrain-API (keine Parts
 -- als Bodenplatte). Keine braunen Materialien, kein Sand, keine offenen
 -- unendlichen Flächen, keine globalen Variablen.
+-- Strassen werden nicht mehr ausgestanzt: der Asphalt wird in RoadBuilder auf
+-- die tatsaechliche Terrainoberflaeche gelegt.
 
 local function requireSibling(name: string): any
 	local ok, module = pcall(require, "./" .. name)

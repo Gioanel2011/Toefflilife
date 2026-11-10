@@ -516,3 +516,89 @@
 - **Validierung:** `selene` auf den Targets, alle `lune`-Specs inkl. `GenericHandlers.spec`, `rojo build` fehlerfrei; Play Solo mit echtem Konto: keines der zehn Remotes liefert `unknown_action`, `VehicleSelect.cash == EconomyGet.cash`.
 - **Commit-Empfehlung:** feat(server): register generic gameplay handlers and unify cash
 - **Ergebnis 2026-11-10:** `ProfileAdapter` (Memory/DataStore), `PlayerStore` (Schema-Sicht, Cash-Sync, Rabatt- und Teile-Persistenz) und `GameplayHandlers` (12 Aktionen inkl. `VehicleSelect`/`EconomyGet`) umgesetzt; Bootstrap initialisiert echte Service-Instanzen, DataStore nur ausserhalb Studio. Validierung: Selene 0 Fehler, 27/27 Lune-Specs (davon `GenericHandlers.spec` 64 Checks), Rojo-Build ok. Abgedeckt: kein `unknown_action`, Cash-Konsistenz, Rabatt/Doppelkauf/Fremdkonto, Shop, Werkstatt, Garage, Mission, Tank-/Dyno-Servicecodes, Persistenz nach Rejoin. Play-Solo-/15-Client-Lauf offen; Tankstelle und Dyno-Zustand fehlen weiterhin als Weltintegration.
+
+### [ ] Task 36: Gekauftes Mofa als echtes, fahrbares Fahrzeug spawnen (Vorbedingung für M-02/F-01/D-01)
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/vehicle/MopedLayout.luau, src/server/vehicle/MopedSpawner.luau, src/server/bootstrap.server.luau, src/client/controllers/MopedMountController.luau, src/client/controllers/MopedController.luau, src/client/controllers/BicycleController.luau, src/client/bootstrap.client.luau, tests/MopedLayout.spec.luau
+- **Context-Dateien:** src/server/vehicle/BicycleSpawner.luau, src/shared/data/VehicleCatalog.luau, src/server/services/PlayerStore.luau, src/server/services/GameplayHandlers.luau
+- **Agent-Persona:** Roblox-Vehicle-Integrator für ein serverautoritatives, verankertes Arcade-Mofa.
+- **Ausführungs-Prompt:**
+  """
+  Erzeuge für jedes serverseitig besessene Mofa (`puch_maxi_s`, `piaggio_ciao`) genau ein verankertes Model `Moped_<VehicleId>_<UserId>` in `Workspace.ToeffliTalVehicles`. Das Model besitzt `VehicleSeat` `Seat`, `Drive` als PrimaryPart, zwei Räder, Tank, Lenker, Licht und Auspuff, alle über WeldConstraints verbunden. Setze `OwnerUserId` (kanonisch), `OwnerPlayerUserId`, `VehicleId` sowie die Fahrwerte aus `VehicleCatalog` als Attribute und tagge es mit `ToeffliMoped`.
+  Spawne gekaufte Mofas beim Kauf neben dem Käufer und beim Beitritt nach dem Charakter-Spawn; entferne sie beim Verlassen. Der Client darf nur eigene Modelle mounten, E steuert Auf-/Absteigen, und die Fahrt erfolgt wie beim Fahrrad über clientseitiges `PivotTo` mit den serverseitig gelieferten Attributwerten. Kein Wheel-Drive, keine Clientpreise, keine Client-Besitzentscheidung und keine globalen Variablen.
+  """
+- **Validierung:** `selene` auf den Target-Dateien, `lune run tests/MopedLayout.spec.luau`, alle übrigen Lune-Specs und `rojo build default.project.json -o build/ToeffliTal.rbxlx` bestehen; Studio bestätigt nach Kauf genau ein Mofa-Model, E-Aufsteigen, Fahren mit W/A/S/D, F-Motor und E-Absteigen ohne roten Output.
+- **Commit-Empfehlung:** feat(vehicle): spawn and mount purchased mopeds
+- **Ergebnis 2026-11-10:** `MopedLayout` (reine, deterministische Bauteile + Parkplätze), `MopedSpawner` (verankertes `VehicleSeat`-Model, Attribute, Tag, Boden-Raycast, Kauf-/Join-Spawn, Cleanup), `MopedMountController` (E-Mount, Auto-Sitz, nur eigene Modelle) und `PivotTo`-Fahrt im `MopedController` umgesetzt. Selene 0 Fehler, 28/28 Lune-Specs (`MopedLayout.spec` 125 Checks), Rojo-Build ok. Studio-Prüfung offen (Kauf → genau ein Model, E, W/A/S/D, F, E); Task bleibt bis dahin `[ ]`.
+
+### [ ] Task 36a: Testguthaben und Testkauf fuer die Studio-Abnahme (Vorbedingung für Task 36)
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/services/PlayerStore.luau, src/server/bootstrap.server.luau, tests/PlayerStoreGrant.spec.luau
+- **Context-Dateien:** src/server/services/GameplayHandlers.luau, src/server/net/RequestRouter.luau, src/shared/data/PlayerDataSchema.luau, src/shared/data/VehicleCatalog.luau
+- **Agent-Persona:** Sicherheitsbewusster Test-Harness-Integrator, der Live-Verhalten unangetastet laesst.
+- **Ausführungs-Prompt:**
+  """
+  Ermoegliche ausschliesslich in Studio (`RunService:IsStudio()`) oder in einer ausdruecklich markierten Abnahme-Welt (`ReplicatedStorage`-Attribut `AcceptanceMode == true`) ein Session-Testguthaben und einen Testkauf. `PlayerStore` erhaelt die Option `sessionGrantCash` als nicht persistiertes Session-Minimum; ungueltige Werte werden verworfen. Der Bootstrap uebergibt 5000 CHF nur im Abnahme-Modus und verbindet pro Spieler einen `/buy <vehicleId>`-Chatbefehl, der den bestehenden serverseitigen `VehicleBuy`-Handler ueber den `RequestRouter` aufruft. Keine Clientpreise, keine Client-Besitzentscheidung, keine globalen Variablen, kein Live-Einfluss.
+  """
+- **Validierung:** `selene` auf den Target-Dateien, `lune run tests/PlayerStoreGrant.spec.luau`, alle uebrigen Lune-Specs und `rojo build default.project.json -o build/ToeffliTal.rbxlx` bestehen; Studio bestaetigt `/buy puch_maxi_s`: genau ein Mofa, Guthaben 4201, danach `EconomyGet` identisch.
+- **Commit-Empfehlung:** test(server): add acceptance cash grant and buy command
+- **Ergebnis 2026-11-10:** `PlayerStore.sessionGrantCash` (sanitiert, abgerundet, nur Session-Minimum, nicht in `cash` gespeichert), Abnahme-Erkennung im Bootstrap (`IsStudio()` oder `AcceptanceMode`-Attribut), 5000 CHF Session-Guthaben, pro Spieler gebundener `/buy`-Chatbefehl über den echten `VehicleBuy`-Handler (Legacy-`Chatted` und `TextChatService.MessageReceived`, Duplikatschutz) inkl. Cleanup bei Leave/Shutdown und `PlayerStoreGrant.spec` (25 Checks) umgesetzt. Selene 0 Fehler, 29/29 Lune-Specs, Rojo-Build ok. Studio-Pruefung `/buy` offen; Task bleibt `[ ]`.
+
+### [ ] Task 36b: Strassen sichtbar, Fahrzeuge geerdet/ausgerichtet, Kollision und E-only-Sitz (Vorbedingung für Task 36)
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/world/RoadSurface.luau, src/server/world/TerrainBuilder.luau, src/server/world/RoadBuilder.luau, src/server/world/IntersectionBuilder.luau, src/server/world/BridgeBuilder.luau, src/server/vehicle/BicycleSpawner.luau, src/server/vehicle/MopedSpawner.luau, src/server/vehicle/VehicleAssembly.luau, src/server/vehicle/MopedLayout.luau, src/server/bootstrap.server.luau, src/client/controllers/VehiclePhysics.luau, src/client/controllers/VehicleMotion.luau, src/client/controllers/BicycleController.luau, src/client/controllers/MopedController.luau, src/client/controllers/MopedMountController.luau, tests/MopedLayout.spec.luau, tests/VehicleSurface.spec.luau
+- **Context-Dateien:** src/server/world/WorldZones.luau, src/server/world/TerrainHeight.luau, src/server/world/ConiferFactory.luau, docs/PLAYTEST.md
+- **Agent-Persona:** Roblox-Welt- und Fahrzeug-Integrator für sichtbare Strassen und echte Physik-Fahrzeuge.
+- **Ausführungs-Prompt:**
+  """
+  Behebe die im Studio gemeldeten Darstellungs- und Fahrfehler, ohne Gameplay-Ökonomie oder Serverautorität zu verändern. Messe die tatsächliche Terrainoberfläche zur Bauzeit per Raycast und lege darauf eine **dünne Asphaltdecke** (`RoadSurface`, ~0.5 Studs dick, `SURFACE_MARGIN` über dem höchsten Messpunkt). Kein Terrain-Ausstanzen. Setze Startfahrrad und Mofa per Raycast auf den echten Boden, versetzt seitlich/hinter dem Charakter, und drehe die Modelle so, dass die sichtbare Front auf lokal -Z liegt. Mache die Fahrzeuge zu echten Physik-Assemblies: Teile entankert, verschweisst, `Drive` trägt die Masse (übrige Teile `Massless`); im Stand verankert, beim Aufsitzen entankert und dem Spieler als Netzwerkbesitzer zugewiesen, beim Absteigen wieder verankert (`VehicleAssembly`). Der Client steuert Ausrichtung (`AlignOrientation`, starr, mit Steigungs-Pitch) und Antrieb (`VectorForce`); nur bei Bodenkontakt wird Schub gegeben, sonst greift Gravitation. Auf-/Absteigen nur per E (`Seat.Disabled`). Keine Clientpreise, keine Client-Besitzentscheidung, keine globalen Variablen.
+  """
+- **Validierung:** `selene` auf den Target-Dateien, `lune run tests/VehicleSurface.spec.luau`, `lune run tests/MopedLayout.spec.luau`, alle übrigen Lune-Specs und `rojo build default.project.json -o build/ToeffliTal.rbxlx` bestehen; Studio bestätigt: Strassen liegen sichtbar auf dem Boden, Fahrrad/Mofa stehen beim Spawn auf den Rädern, Front zeigt in Fahrtrichtung, echte Gravitation/Kollision (kein Durchfahren, kein Fliegen), Steigungen werden geneigt befahren, Auf-/Absteigen nur per E ohne Auto-Sitz.
+- **Commit-Empfehlung:** fix(world,vehicle): drape roads on terrain and drive vehicles with real physics
+- **Ergebnis 2026-11-10:** Terrain-Ausstanzen entfernt; `RoadBuilder`/`IntersectionBuilder`/`BridgeBuilder` messen die Oberfläche per Raycast und legen eine dünne (0.5) Asphaltdecke mit 0.15 Abstand darüber – kein Schweben, kein Begraben, keine Rampen. Fahrzeuge sind echte Physik-Assemblies: `VehicleAssembly` verankert im Stand und gibt sie beim Aufsitzen an die Engine/den Spieler frei; `VehiclePhysics` (Client) steuert starre Ausrichtung mit Steigungs-Pitch, Vortrieb/Bremse/Grip per `VectorForce` und gibt nur bei Bodenkontakt Schub (kein Fliegen). `BicycleSpawner`/`MopedSpawner` erden per Raycast (Fallback `TerrainHeight`), versetzen den Spawn und loggen die Position; Respawn auf `CharacterAdded`. Sitze `Disabled`, E-only. Selene 0 Fehler, 30/30 Lune-Specs (`VehicleSurface.spec` 29 Checks, `MopedLayout.spec` 129 Checks), Rojo-Build ok. Nachtrag: serverseitige `AlignOrientation` haelt die Fahrzeuge auch ohne Client-Besitz aufrecht, Zielgier wird beim Aufsitzen aktualisiert, Spawn aus der **Charakter-Standhoehe** (`HumanoidRootPart.Y - HipHeight` + Radradius + 0.5), Sitz-Nachsicht 0.75s, **kein Occupant-Poll mehr** (verhinderte sporadisches Wieder-Verankern). Studio-Pruefung offen; Task bleibt `[ ]`.
+
+### [ ] Task 36e: Gebaeude auf spielbare Groesse skalieren
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/world/BuildingPlacement.luau, src/server/world/BuildingFactory.luau, src/server/world/GarageFactory.luau, src/server/world/GarageWorldBuilder.luau, src/server/world/ChurchBuilder.luau, src/server/world/DonerShopBuilder.luau, src/server/world/WorldLayout.luau, src/server/world/WorldZones.luau
+- **Context-Dateien:** src/server/world/VillageBuilder.luau, src/server/world/data/BuildingCatalog.luau, tests/WorldZones.spec.luau, tests/GaragePlacement.spec.luau, tests/BuildingCatalog.spec.luau
+- **Agent-Persona:** Roblox-Welt-Skalierer für glaubwürdige Gebäudegrössen ohne Layoutkollisionen.
+- **Ausführungs-Prompt:**
+  """
+  Vergrössere Häuser (Faktor 1.7), Garagen (1.4), Kirche (1.7) und Dönerladen (1.5) einheitlich, ohne Gameplay-Logik zu ändern. Neue Hilfsfunktion `BuildingPlacement` skaliert Modelle und setzt die tiefste Stelle exakt auf den Boden; Garagen werden pivotbasiert platziert, der Döner-Abholpunkt wird nach dem Skalieren exakt zurückgesetzt. Ziehe die Reservierungsflächen nach (`SLOT_FOOTPRINT`, `CHURCH.footprint`, `GARAGE_RADIUS`) und vergrössere `DELIVERY_OFFSET`, damit Lieferpunkte vor der grösseren Fassade liegen. Keine Preise, keine Besitzlogik, keine globalen Variablen.
+  """
+- **Validierung:** `selene` auf den Target-Dateien, alle Lune-Specs (`WorldZones.spec`, `GaragePlacement.spec`, `BuildingCatalog.spec`, `WorldLayout.spec`) und `rojo build default.project.json -o build/ToeffliTal.rbxlx` bestehen; Studio bestätigt Häuser/Garagen/Kirche/Laden deutlich grösser, keine Überlappung mit Strassen, Gebäude stehen bündig auf dem Boden.
+- **Commit-Empfehlung:** feat(world): scale buildings to player-readable sizes
+- **Ergebnis 2026-11-10:** `BuildingPlacement` (Skalieren + Boden-Ausrichtung), Häuser 1.7, Garagen 1.4, Kirche 1.7, Laden 1.5; Garagen pivotbasiert, Abholpunkt exakt zurückgesetzt, Reservierungen und Lieferabstand angepasst. Selene 0 Fehler, 30/30 Lune-Specs, Rojo-Build ok. Studio-Sichtprüfung offen; Task bleibt `[ ]`.
+
+### [ ] Task 36f: Start-Spawn auf den Boden und Fahrzeug-Spawn entkoppeln
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/world/SpawnBuilder.luau, src/server/world/ValleyWorld.luau, src/server/world/BuildingPlacement.luau, src/server/world/VillageBuilder.luau, src/server/world/GarageWorldBuilder.luau, src/server/world/DonerShopBuilder.luau, src/server/world/ChurchBuilder.luau, src/server/vehicle/BicycleSpawner.luau, src/server/vehicle/MopedSpawner.luau
+- **Context-Dateien:** src/server/world/WorldLayout.luau, src/server/world/TerrainHeight.luau, docs/PLAYTEST.md
+- **Agent-Persona:** Roblox-Spawn-Integrator, der Spawnhöhen und Bodenkontakt robust macht.
+- **Ausführungs-Prompt:**
+  """
+  Behebe den fehlenden Start-Spawn: Ohne `SpawnLocation` setzt Roblox Charaktere bei ca. Y=100 ab, wodurch der Fahrzeug-Spawn die Fallhöhe übernimmt. Baue genau einen `SpawnLocation` am Dönerplatz (`(0, Boden+0.2, 26)`) auf der per Raycast gemessenen Oberfläche. Entkopple den Fahrzeug-Spawn von der Charakterhöhe: Raycast von fester Höhe (Y=512) nach unten, Fallback `TerrainHeight.heightAt`; die Charakterposition dient nur für X/Z und Blickrichtung. Ziehe die Bodenmessung für Häuser, Garagen, Kirche und Laden ebenfalls auf den Bau-Raycast (`BuildingPlacement.surfaceAt`). Keine Preise, keine Besitzlogik, keine globalen Variablen.
+  """
+- **Validierung:** `selene` auf den Target-Dateien, alle Lune-Specs und `rojo build default.project.json -o build/ToeffliTal.rbxlx` bestehen; Studio bestätigt: Charakter spawnt auf dem Boden, `[Spawn]`-Log zeigt Y nahe der Terrainhöhe (nicht ~100), Fahrrad/Mofa stehen sichtbar neben dem Charakter.
+- **Commit-Empfehlung:** fix(world,vehicle): add ground spawn and decouple vehicle spawn height
+- **Ergebnis 2026-11-10:** `SpawnBuilder` setzt einen `SpawnLocation` am Dönerplatz auf den per Raycast gemessenen Boden; `BuildingPlacement.surfaceAt` liefert die tatsächliche Oberfläche für Häuser, Garagen, Kirche und Laden; Fahrrad/Mofa spawnen per Raycast von Y=512 (Fallback `TerrainHeight`) unabhängig von der Charakterhöhe. Selene 0 Fehler, 30/30 Lune-Specs, Rojo-Build ok. Studio-Prüfung offen; Task bleibt `[ ]`.
+- **Nachtrag 36g (2026-11-10):** Client-seitige `GetNetworkOwner()`-Abfrage entfernt (Server-API, verursachte „Network Ownership API can only be called from the Server"); Coyote-Zeit 0.2 s hält den Schub über kurze Bodenwellen; Beschleunigung Fahrrad 130 / Mofa 180 gegen kraftlose Steigungen. Selene 0 Fehler, 30/30 Lune-Specs, Rojo-Build ok.
+
+### [ ] Task 36h: Strassen bündig in das Terrain malen
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/world/RoadSurface.luau, src/server/world/RoadPainter.luau, src/server/world/RoadBuilder.luau, src/server/world/IntersectionBuilder.luau, src/server/world/BridgeBuilder.luau, src/server/world/ValleyWorld.luau, tests/VehicleSurface.spec.luau
+- **Context-Dateien:** src/server/world/WorldZones.luau, src/server/world/TerrainHeight.luau, src/server/world/TerrainBuilder.luau
+- **Agent-Persona:** Roblox-Terrain-Integrator für garantiert bündige Strassen.
+- **Ausführungs-Prompt:**
+  """
+  Ersetze die schwebenden Asphalt-Parts durch buendig in das Terrain gemalten Asphalt: `RoadPainter` stempelt die oberste Voxelreihe aller `ROAD_SEGMENTS`, `STOP_ROADS` und `ROUNDABOUTS` mit `Enum.Material.Asphalt`. `RoadSurface` liefert nur noch reine Regeln (`cellTop`, `stepsFor`, `paintSize`). `RoadBuilder` und `IntersectionBuilder` zeichnen nur Mittellinie und Haltelinien; `BridgeBuilder` setzt ein duennes Deck buendig auf die gemalte Flaeche. Keine Preise, keine Besitzlogik, keine globalen Variablen.
+  """
+- **Validierung:** `selene` auf den Target-Dateien, alle Lune-Specs (`VehicleSurface.spec`) und `rojo build default.project.json -o build/ToeffliTal.rbxlx` bestehen; Studio bestätigt: Strassen sind durchgehend als Asphalt sichtbar und liegen bündig auf dem Terrain, keine schwebenden oder versinkenden Streifen.
+- **Commit-Empfehlung:** fix(world): paint roads flush into terrain
+- **Ergebnis 2026-11-10:** `RoadPainter` färbt die oberste Voxelreihe der Strassen/Stopstrassen/Kreisel mit Asphalt; `RoadBuilder` (Mittellinie) und `IntersectionBuilder` (Haltelinien) zeichnen nur noch Linien, `BridgeBuilder` ein dünnes, bündiges Deck. Selene 0 Fehler, 30/30 Lune-Specs, Rojo-Build ok. Studio-Prüfung offen; Task bleibt `[ ]`.

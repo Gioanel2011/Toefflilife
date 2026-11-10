@@ -1689,6 +1689,7 @@ local FuelService = require(ServerRoot:WaitForChild("services"):WaitForChild("Fu
 local ValleyWorld = require(ServerRoot:WaitForChild("world"):WaitForChild("ValleyWorld"))
 local WorldLayout = require(ServerRoot:WaitForChild("world"):WaitForChild("WorldLayout"))
 local BicycleSpawner = require(ServerRoot:WaitForChild("vehicle"):WaitForChild("BicycleSpawner"))
+local MopedSpawner = require(ServerRoot:WaitForChild("vehicle"):WaitForChild("MopedSpawner"))
 
 -- ServicesFolder/GameConfig werden für Rojo-Mapping und Balancing-Checks referenziert.
 local _Anchor: Instance? = ServicesFolder
@@ -1702,6 +1703,13 @@ local shuttingDown = false
 -- bleibt bei der strengen Pruefung. Alle Services und der Router erhalten
 -- dieselbe kanonische ID.
 local allowSimulatedPlayers = RunService:IsStudio()
+-- Abnahme-Modus: Studio zaehlt immer, eine veroeffentlichte Abnahme-Welt setzt
+-- `ReplicatedStorage:SetAttribute("AcceptanceMode", true)`. Nur dann gibt es
+-- Testguthaben und den `/buy`-Chatbefehl; Live bleibt unveraendert.
+local acceptanceMode = RunService:IsStudio()
+	or ReplicatedStorage:GetAttribute("AcceptanceMode") == true
+local ACCEPTANCE_GRANT_CASH = 5000
+
 -- Echte Service-Instanzen (nicht die Module), damit Profile, Guthaben und
 -- Spielerzustand serverseitig zusammenlaufen.
 local economyService: any = nil
@@ -1711,6 +1719,10 @@ local vehicleServiceInst: any = nil
 local fuelServiceInst: any = nil
 local dynoServiceInst: any = nil
 local transactionCounter = 0
+-- Kanonische UserId -> echte Player-Instanz. Nur so kann `onVehicleOwned`
+-- ein gekauftes Mofa beim Kaeufer spawnen, obwohl der Router kanonische IDs
+-- verwendet.
+local playersByCanonicalId: { [number]: Player } = {}
 
 local function canonicalUserId(player: Player): number?
 	return PlayerIds.canonical(player.UserId, allowSimulatedPlayers)
@@ -1889,7 +1901,131 @@ local function nextTransactionId(userId: number, kind: string): string
 	return string.format("%s:%s:%d:%d", kind, tostring(userId), os.time(), transactionCounter)
 end
 
-local function registerVehicle(userId: number, vehicleId: string): ()
+-- Nur fuer Studio/Abnahme: Testkauf per Chat. Der Befehl ruft denselben
+-- serverseitigen VehicleBuy-Handler auf wie der Remote; Preis, Besitz und
+-- Guthaben bleiben serverseitig. Ausserhalb des Abnahme-Modus wird nichts
+-- verbunden.
+local acceptanceRouter: any = nil
+local acceptancePlayerFor: any = nil
+local acceptanceChatConnections: { [number]: RBXScriptConnection } = {}
+local acceptanceLastCommand: { [number]: string } = {}
+local acceptanceLastCommandAt: { [number]: number } = {}
+
+local function acceptancePurchase(player: Player, vehicleId: string): ()
+	if acceptanceRouter == nil or acceptancePlayerFor == nil then
+		return
+	end
+	local response = acceptanceRouter:handle(acceptancePlayerFor(player), "VehicleBuy", {
+		vehicleId = vehicleId,
+	})
+	local data: any = nil
+	if type(response) == "table" then
+		data = response.data
+	end
+	if type(data) == "table" and data.ok == true then
+		local cash = data.cash
+		if type(cash) ~= "number" then
+			cash = -1
+		end
+		print(string.format(
+			"[ToeffliTal][Abnahme] %s kaufte %s; Guthaben: %d",
+			player.Name,
+			vehicleId,
+			cash
+		))
+	else
+		local code = "unknown"
+		if type(data) == "table" and type(data.code) == "string" then
+			code = data.code
+		end
+		print(string.format(
+			"[ToeffliTal][Abnahme] Kauf von %s fuer %s abgelehnt: %s",
+			vehicleId,
+			player.Name,
+			code
+		))
+	end
+end
+
+local function onAcceptanceChat(player: Player, message: any): ()
+	if type(message) ~= "string" then
+		return
+	end
+	local vehicleId = string.match(message, "^%s*/buy%s+(%S+)%s*$")
+	if vehicleId == nil then
+		return
+	end
+	-- Legacy-Chat und TextChatService koennen beide feuern; dieselbe Eingabe
+	-- innerhalb einer Sekunde wird nur einmal ausgefuehrt.
+	local now = os.clock()
+	local lastAt = acceptanceLastCommandAt[player.UserId]
+	if
+		lastAt ~= nil
+		and now - lastAt < 1
+		and acceptanceLastCommand[player.UserId] == vehicleId
+	then
+		return
+	end
+	acceptanceLastCommand[player.UserId] = vehicleId
+	acceptanceLastCommandAt[player.UserId] = now
+	if VehicleCatalog.get(vehicleId) == nil then
+		print(string.format(
+			"[ToeffliTal][Abnahme] Unbekanntes Fahrzeug: %s",
+			vehicleId
+		))
+		return
+	end
+	acceptancePurchase(player, vehicleId)
+end
+
+local function bindAcceptanceTextChat(): ()
+	if not acceptanceMode then
+		return
+	end
+	local ok, connection = pcall(function()
+		return game:GetService("TextChatService").MessageReceived:Connect(function(message: any)
+			local source = message.TextSource
+			if source == nil then
+				return
+			end
+			local player = Players:GetPlayerByUserId(source.UserId)
+			if player == nil then
+				return
+			end
+			onAcceptanceChat(player, message.Text)
+		end)
+	end)
+	if ok and connection ~= nil then
+		table.insert(connections, connection :: RBXScriptConnection)
+	end
+end
+
+local function bindAcceptanceChat(player: Player): ()
+	if not acceptanceMode or acceptanceRouter == nil then
+		return
+	end
+	local existing = acceptanceChatConnections[player.UserId]
+	if existing ~= nil then
+		existing:Disconnect()
+	end
+	local connection = player.Chatted:Connect(function(message: string)
+		onAcceptanceChat(player, message)
+	end)
+	acceptanceChatConnections[player.UserId] = connection
+	table.insert(connections, connection)
+end
+
+local function unbindAcceptanceChat(player: Player): ()
+	local connection = acceptanceChatConnections[player.UserId]
+	if connection ~= nil then
+		connection:Disconnect()
+		acceptanceChatConnections[player.UserId] = nil
+	end
+	acceptanceLastCommand[player.UserId] = nil
+	acceptanceLastCommandAt[player.UserId] = nil
+end
+
+local function registerVehicle(userId: number, vehicleId: string, spawnNow: boolean?): ()
 	if playerStore == nil or fuelServiceInst == nil or dynoServiceInst == nil then
 		return
 	end
@@ -1916,11 +2052,35 @@ local function registerVehicle(userId: number, vehicleId: string): ()
 		hasEngine = definition.Fuel.HasEngine,
 		physics = definition.Physics,
 	}, parts)
+
+	-- Nur echte Mofas erhalten ein Weltmodell. Beim Beitritt wird bewusst
+	-- spaeter gespawnt, wenn der Charakter sicher existiert.
+	if spawnNow ~= false and definition.Class == "moped" then
+		local player = playersByCanonicalId[userId]
+		if player ~= nil then
+			MopedSpawner.createForPlayer(player, vehicleId, userId)
+		end
+	end
 end
 
 local function registerOwnedVehicles(userId: number): ()
 	for _, vehicleId in ipairs(playerStore:owned(userId)) do
-		registerVehicle(userId, vehicleId)
+		registerVehicle(userId, vehicleId, false)
+	end
+end
+
+local function spawnOwnedMopeds(player: Player): ()
+	if playerStore == nil then
+		return
+	end
+	local userId = canonicalUserId(player)
+	if userId == nil then
+		return
+	end
+	for _, vehicleId in ipairs(playerStore:owned(userId)) do
+		if VehicleCatalog.isMoped(vehicleId) then
+			MopedSpawner.createForPlayer(player, vehicleId, userId)
+		end
 	end
 end
 
@@ -1936,7 +2096,11 @@ local function setupServices(netFolder: Folder): ()
 	)
 	GarageService.init({ anchors = garageAnchors })
 
-	playerStore = PlayerStore.new({ profiles = profileService, economy = economyService })
+	playerStore = PlayerStore.new({
+		profiles = profileService,
+		economy = economyService,
+		sessionGrantCash = if acceptanceMode then ACCEPTANCE_GRANT_CASH else 0,
+	})
 
 	-- Preise kommen ausschliesslich aus den Serverkatalogen.
 	vehicleServiceInst = VehicleService.new()
@@ -2024,6 +2188,10 @@ local function setupServices(netFolder: Folder): ()
 
 	-- Alle generischen Remotes an den Router binden; die drei Delivery-Aktionen
 	-- bleiben dem dedizierten Delivery-Router vorbehalten.
+	if acceptanceMode then
+		acceptanceRouter = genericRouter
+		acceptancePlayerFor = requestPlayer
+	end
 	local deliveryActions = {
 		[RemoteProtocol.ACTIONS.DELIVERY_ORDER] = true,
 		[RemoteProtocol.ACTIONS.DELIVERY_PICKUP] = true,
@@ -2077,7 +2245,8 @@ local function spawnPlayer(player: Player): ()
 	end
 	callOptional(VehicleService, "onPlayerSpawned", player)
 	callOptional(FuelService, "onPlayerSpawned", player)
-	BicycleSpawner.createForPlayer(player, CFrame.new(0, 5, 0))
+	BicycleSpawner.createForPlayer(player)
+	spawnOwnedMopeds(player)
 end
 
 local function onPlayerAdded(player: Player): ()
@@ -2089,21 +2258,39 @@ local function onPlayerAdded(player: Player): ()
 		warn(string.format("[ToeffliTal][Server] Ungueltige UserId: %s", tostring(player.UserId)))
 		return
 	end
+	playersByCanonicalId[userId] = player
 	local loaded, err = pcall(function()
 		playerStore:load(userId)
 	end)
 	if not loaded then
 		warn(string.format("[ToeffliTal][Server] Profil konnte nicht geladen werden: %s", tostring(err)))
 	end
+	bindAcceptanceChat(player)
 	callOptional(GarageService, "assignGarage", servicePlayer(player))
 	registerOwnedVehicles(userId)
 	spawnPlayer(player)
+	-- Respawn: Fahrzeuge erst setzen, wenn der neue Charakter-Root existiert;
+	-- so landet der Boden-Raycast zuverlaessig auf dem echten Grund.
+	table.insert(connections, player.CharacterAdded:Connect(function()
+		task.defer(function()
+			if player.Parent == nil then
+				return
+			end
+			BicycleSpawner.createForPlayer(player)
+			spawnOwnedMopeds(player)
+		end)
+	end))
 end
 
 local function onPlayerRemoving(player: Player): ()
 	local userId = canonicalUserId(player)
+	unbindAcceptanceChat(player)
 	callOptional(GarageService, "releaseGarage", servicePlayer(player))
 	BicycleSpawner.releaseForPlayer(player)
+	MopedSpawner.releaseForPlayer(player)
+	if userId ~= nil then
+		playersByCanonicalId[userId] = nil
+	end
 	if userId ~= nil and playerStore ~= nil then
 		local ok, err = playerStore:release(userId)
 		if not ok then
@@ -2121,6 +2308,9 @@ local function shutdown(): ()
 		conn:Disconnect()
 	end
 	table.clear(connections)
+	table.clear(acceptanceChatConnections)
+	table.clear(acceptanceLastCommand)
+	table.clear(acceptanceLastCommandAt)
 	-- Persistenz vor Welt-Abbau: kein Datenverlust beim Herunterfahren.
 	if playerStore ~= nil then
 		local saved, failed = playerStore:saveAll()
@@ -2146,6 +2336,7 @@ local function init(): ()
 		starterMaxDistance = 700,
 	})
 	-- 7. Spielerbeitritt, Spawn und Verlassen verdrahten.
+	bindAcceptanceTextChat()
 	table.insert(connections, Players.PlayerAdded:Connect(onPlayerAdded))
 	table.insert(connections, Players.PlayerRemoving:Connect(onPlayerRemoving))
 	-- Studio-Play-Solo: bereits verbundene Spieler nachträglich einhängen.
@@ -2153,6 +2344,12 @@ local function init(): ()
 		task.spawn(onPlayerAdded, player)
 	end
 	game:BindToClose(shutdown)
+	if acceptanceMode then
+		print(string.format(
+			"[ToeffliTal][Abnahme] aktiv: Testguthaben %d CHF, Chatbefehl /buy <vehicleId>",
+			ACCEPTANCE_GRANT_CASH
+		))
+	end
 	print("[ToeffliTal][Server] Bootstrap ready: systems integrated")
 end
 
@@ -4979,6 +5176,8 @@ export type Options = {
 	profiles: any,
 	economy: any,
 	schema: any?,
+	-- Nur fuer Studio/Abnahme: Mindestguthaben pro Session. 0 bedeutet aus.
+	sessionGrantCash: number?,
 }
 
 local function toKey(userId: any): string
@@ -5023,6 +5222,11 @@ function PlayerStore.new(options: Options)
 	self._profiles = options.profiles
 	self._economy = options.economy
 	self._schema = options.schema or PlayerDataSchema
+	local grant = options.sessionGrantCash
+	if type(grant) ~= "number" or grant < 0 then
+		grant = 0
+	end
+	self._sessionGrantCash = math.floor(grant)
 	self._views = {}
 	self._workshopProfiles = {}
 	self._workshopVehicles = {}
@@ -5082,6 +5286,12 @@ function PlayerStore:load(userId: any): any
 	end
 	local view = defaultView(profile)
 	view.schema = profile
+	-- Studio/Abnahme: Mindestguthaben nur fuer diese Session anheben. Der
+	-- gespeicherte Kontostand bleibt unveraendert, solange nicht ausgegeben
+	-- oder gutgeschrieben wird.
+	if self._sessionGrantCash > 0 and view.money < self._sessionGrantCash then
+		view.money = self._sessionGrantCash
+	end
 	self._views[key] = view
 	local records: { [string]: any } = {}
 	self._workshopProfiles[key] = buildWorkshopProfile(profile, view, records)
@@ -6336,14 +6546,27 @@ return WorkshopService
             <string name="Source"><![CDATA[--!strict
 -- BicycleSpawner: erzeugt pro Spieler genau ein kostenloses Startfahrrad.
 -- Kein Motor, kein Treibstoff, kein Tuning, keine Preise, keine Gameplay-Logik.
+-- Das Fahrrad wird seitlich hinter dem Charakter auf den echten Boden gesetzt
+-- (Raycast) und nur per E bestiegen; der Sitz ist dauerhaft deaktiviert.
 
 local CollectionService = game:GetService("CollectionService")
+
+local TerrainHeight = require("../world/TerrainHeight")
+local VehicleAssembly = require(script.Parent.VehicleAssembly)
 
 local BicycleSpawner = {}
 
 local FOLDER_NAME = "ToeffliTalVehicles"
 local TAG_NAME = "ToeffliBicycle"
 local DEFAULT_SPAWN = CFrame.new(0, 5, 0)
+-- Links neben dem Charakter und leicht hinter ihm, damit niemand beim Spawn
+-- automatisch im Sitz landet.
+local SPAWN_SIDE_OFFSET = -2.5
+local SPAWN_BACK_OFFSET = 2
+local SPAWN_RAY_UP = 512
+local SPAWN_RAY_DOWN = 1024
+-- Abstand Model-Pivot zu den Radunterseiten (siehe Bauteile unten).
+local PIVOT_HEIGHT = 1.0
 
 local function getFolder(): Folder
 	local existing = workspace:FindFirstChild(FOLDER_NAME)
@@ -6354,6 +6577,51 @@ local function getFolder(): Folder
 	folder.Name = FOLDER_NAME
 	folder.Parent = workspace
 	return folder
+end
+
+local function flatForward(look: Vector3): Vector3
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.001 then
+		return Vector3.new(0, 0, -1)
+	end
+	return flat.Unit
+end
+
+-- Setzt das Fahrrad auf den tatsaechlichen Boden. Rein serverseitig, ohne
+-- Clientwerte. Der Strahl startet bewusst sehr hoch, damit er unabhaengig
+-- davon trifft, wo der Charakter gerade schwebt oder faellt.
+local function resolveSpawnCFrame(player: Player, reference: CFrame?): CFrame
+	local ref = reference or DEFAULT_SPAWN
+	local character = player.Character
+	if character ~= nil then
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root ~= nil and root:IsA("BasePart") then
+			ref = (root :: BasePart).CFrame
+		end
+	end
+
+	local forward = flatForward(ref.LookVector)
+	local right = Vector3.new(-forward.Z, 0, forward.X)
+	local target = ref.Position + right * SPAWN_SIDE_OFFSET + forward * -SPAWN_BACK_OFFSET
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.RespectCanCollide = true
+	local folder = workspace:FindFirstChild(FOLDER_NAME)
+	local filters: { Instance } = {}
+	if character ~= nil then
+		table.insert(filters, character)
+	end
+	if folder ~= nil then
+		table.insert(filters, folder)
+	end
+	params.FilterDescendantsInstances = filters
+
+	local origin = Vector3.new(target.X, SPAWN_RAY_UP, target.Z)
+	local hit = workspace:Raycast(origin, Vector3.new(0, -SPAWN_RAY_DOWN, 0), params)
+	local groundY = if hit ~= nil then hit.Position.Y else TerrainHeight.heightAt(target.X, target.Z)
+	local pivot = Vector3.new(target.X, groundY + PIVOT_HEIGHT + 0.5, target.Z)
+	return CFrame.lookAt(pivot, pivot + forward)
 end
 
 local function makePart(className: string, name: string, size: Vector3, color: Color3): BasePart
@@ -6382,34 +6650,39 @@ end
 function BicycleSpawner.createForPlayer(player: Player, spawnCFrame: CFrame?): Model
 	BicycleSpawner.releaseForPlayer(player)
 
-	local base = spawnCFrame or DEFAULT_SPAWN
+	local base = resolveSpawnCFrame(player, spawnCFrame)
 	local folder = getFolder()
 
 	local model = Instance.new("Model")
 	model.Name = string.format("StarterBicycle_%d", player.UserId)
 
+	-- Die sichtbare Front liegt auf lokal -Z und damit in Richtung
+	-- `CFrame.LookVector`; so faehrt das Rad vorwaerts, nicht rueckwaerts.
 	local drive = makePart("Part", "Drive", Vector3.new(1.2, 0.4, 3.2), Color3.fromRGB(180, 180, 180))
-	drive.CFrame = base * CFrame.new(0, 1.0, 0)
+	drive.CFrame = base
 
 	local seat = makePart("Seat", "Seat", Vector3.new(1.0, 0.5, 1.0), Color3.fromRGB(40, 40, 40))
 	seat.CanCollide = false
-	seat.CFrame = base * CFrame.new(0, 1.6, -0.6)
+	seat.CFrame = base * CFrame.new(0, 0.55, 0.6)
 
 	local wheelFront = makePart("Part", "WheelFront", Vector3.new(0.4, 1.4, 1.4), Color3.fromRGB(25, 25, 25))
 	wheelFront.Shape = Enum.PartType.Cylinder
-	wheelFront.CFrame = base * CFrame.new(0, 0.7, 1.6)
+	wheelFront.CFrame = base * CFrame.new(0, -0.3, -1.6)
 
 	local wheelRear = makePart("Part", "WheelRear", Vector3.new(0.4, 1.4, 1.4), Color3.fromRGB(25, 25, 25))
 	wheelRear.Shape = Enum.PartType.Cylinder
-	wheelRear.CFrame = base * CFrame.new(0, 0.7, -1.6)
+	wheelRear.CFrame = base * CFrame.new(0, -0.3, 1.6)
 
 	-- Lenker.
 	local handlebar = makePart("Part", "Handlebar", Vector3.new(1.2, 0.3, 0.3), Color3.fromRGB(90, 90, 90))
 	handlebar.CanCollide = false
-	handlebar.CFrame = base * CFrame.new(0, 1.7, 1.2)
+	handlebar.CFrame = base * CFrame.new(0, 0.85, -1.2)
 
 	for _, part in { drive, seat, wheelFront, wheelRear, handlebar } do
 		part.Parent = model
+		if part ~= drive then
+			part.Massless = true
+		end
 	end
 	model.PrimaryPart = drive
 
@@ -6417,12 +6690,24 @@ function BicycleSpawner.createForPlayer(player: Player, spawnCFrame: CFrame?): M
 		weldTo(drive, part, model)
 	end
 
+	-- Nur E darf aufsteigen: Roblox sitzt Spieler sonst beim Beruehren auf.
+	seat.Disabled = true
+
 	model:SetAttribute("OwnerUserId", player.UserId)
 	model:SetAttribute("IsStarterBicycle", true)
 	CollectionService:AddTag(model, TAG_NAME)
 
 	model.Parent = folder
 	model:PivotTo(base)
+	VehicleAssembly.watch(player, model, drive, seat :: VehicleSeat)
+
+	print(string.format(
+		"[ToeffliTal][Spawn] %s bei %.1f/%.1f/%.1f",
+		model.Name,
+		base.X,
+		base.Y,
+		base.Z
+	))
 
 	return model
 end
@@ -6445,12 +6730,588 @@ return BicycleSpawner
 ]]></string>
           </Properties>
         </Item>
+        <Item class="ModuleScript" referent="34">
+          <Properties>
+            <string name="Name">MopedLayout</string>
+            <string name="Source"><![CDATA[--!strict
+-- MopedLayout: reine, deterministische Bauteilbeschreibung fuer Puch Maxi S
+-- und Piaggio Ciao. Keine Roblox-Instanzen und keine Laufzeitabhaengigkeit,
+-- damit die Layoutdaten mit `lune run` geprueft werden koennen.
+-- Keine Preise, keine Fahrphysik und keine Gameplay-Logik.
+
+export type Vec3 = { x: number, y: number, z: number }
+export type Rgb = { r: number, g: number, b: number }
+
+export type PartSpec = {
+	name: string,
+	size: Vec3,
+	offset: Vec3,
+	color: Rgb,
+	shape: string,
+	canCollide: boolean,
+	transparency: number,
+}
+
+export type MopedSpec = {
+	vehicleId: string,
+	displayName: string,
+	primaryPart: string,
+	seatName: string,
+	parts: { PartSpec },
+}
+
+local MopedLayout = {}
+
+MopedLayout.TAG_NAME = "ToeffliMoped"
+MopedLayout.PRIMARY_PART = "Drive"
+MopedLayout.SEAT_NAME = "Seat"
+MopedLayout.SPAWN_SPACING = 3.2
+MopedLayout.PIVOT_HEIGHT = 0.7
+
+MopedLayout.REQUIRED_PARTS = {
+	"Drive",
+	"Seat",
+	"WheelFront",
+	"WheelRear",
+	"Handlebar",
+}
+
+local PARKING_SLOTS: { [string]: number } = {
+	puch_maxi_s = 0,
+	piaggio_ciao = 1,
+}
+
+local function vec(x: number, y: number, z: number): Vec3
+	return { x = x, y = y, z = z }
+end
+
+local function rgb(r: number, g: number, b: number): Rgb
+	return { r = r, g = g, b = b }
+end
+
+local function part(
+	name: string,
+	size: Vec3,
+	offset: Vec3,
+	color: Rgb,
+	shape: string,
+	canCollide: boolean,
+	transparency: number?
+): PartSpec
+	return {
+		name = name,
+		size = size,
+		offset = offset,
+		color = color,
+		shape = shape,
+		canCollide = canCollide,
+		transparency = transparency or 0,
+	}
+end
+
+-- Alle Offsets beziehen sich auf den Mittelpunkt von `Drive` (Model-Pivot).
+-- Die sichtbare Front liegt auf lokal -Z (Richtung `CFrame.LookVector`);
+-- Vorderrad, Lenker, Scheinwerfer und Gabel zeigen deshalb nach -Z.
+-- Die Raeder stehen bei y=0; der Spawner setzt den Pivot deshalb auf
+-- Bodenhoehe + PIVOT_HEIGHT.
+local function buildSpec(
+	vehicleId: string,
+	displayName: string,
+	frameColor: Rgb,
+	tankColor: Rgb,
+	accentColor: Rgb
+): MopedSpec
+	local black = rgb(24, 24, 24)
+	local dark = rgb(38, 38, 42)
+	local rubber = rgb(18, 18, 18)
+	local light = rgb(255, 226, 120)
+	local tail = rgb(200, 40, 36)
+	local steel = rgb(150, 152, 156)
+
+	return {
+		vehicleId = vehicleId,
+		displayName = displayName,
+		primaryPart = MopedLayout.PRIMARY_PART,
+		seatName = MopedLayout.SEAT_NAME,
+		parts = {
+			part("Drive", vec(0.7, 0.5, 2.8), vec(0, 0, 0), frameColor, "Block", true),
+			part("WheelFront", vec(0.35, 1.4, 1.4), vec(0, 0, -1.35), rubber, "Cylinder", true),
+			part("WheelRear", vec(0.35, 1.4, 1.4), vec(0, 0, 1.35), rubber, "Cylinder", true),
+			part("Seat", vec(1.0, 0.35, 1.15), vec(0, 0.7, 0.35), dark, "Block", false),
+			part("Handlebar", vec(1.3, 0.16, 0.16), vec(0, 0.85, -1.05), accentColor, "Block", false),
+			part("Tank", vec(0.72, 0.45, 0.95), vec(0, 0.5, -0.15), tankColor, "Block", false),
+			part("LightFront", vec(0.3, 0.3, 0.3), vec(0, 0.82, -1.3), light, "Block", false),
+			part("LightRear", vec(0.22, 0.22, 0.12), vec(0, 0.55, 1.35), tail, "Block", false),
+			part("Exhaust", vec(0.16, 0.16, 1.3), vec(0.36, -0.1, 0.85), steel, "Block", false),
+			part("Fork", vec(0.16, 0.9, 0.16), vec(0, 0.25, -1.25), black, "Block", false),
+		},
+	}
+end
+
+local SPEC_FACTORIES: { [string]: () -> MopedSpec } = {
+	puch_maxi_s = function(): MopedSpec
+		return buildSpec(
+			"puch_maxi_s",
+			"Puch Maxi S",
+			rgb(178, 46, 40),
+			rgb(214, 196, 150),
+			rgb(70, 70, 74)
+		)
+	end,
+	piaggio_ciao = function(): MopedSpec
+		return buildSpec(
+			"piaggio_ciao",
+			"Piaggio Ciao",
+			rgb(38, 95, 148),
+			rgb(212, 212, 216),
+			rgb(60, 60, 64)
+		)
+	end,
+}
+
+local function copyVec(source: Vec3): Vec3
+	return { x = source.x, y = source.y, z = source.z }
+end
+
+local function copyRgb(source: Rgb): Rgb
+	return { r = source.r, g = source.g, b = source.b }
+end
+
+local function copySpec(source: MopedSpec): MopedSpec
+	local parts: { PartSpec } = {}
+	for _, entry in ipairs(source.parts) do
+		table.insert(parts, {
+			name = entry.name,
+			size = copyVec(entry.size),
+			offset = copyVec(entry.offset),
+			color = copyRgb(entry.color),
+			shape = entry.shape,
+			canCollide = entry.canCollide,
+			transparency = entry.transparency,
+		})
+	end
+	return {
+		vehicleId = source.vehicleId,
+		displayName = source.displayName,
+		primaryPart = source.primaryPart,
+		seatName = source.seatName,
+		parts = parts,
+	}
+end
+
+-- Liefert eine frische Kopie, damit Aufrufer die Konstanten nicht mutieren.
+function MopedLayout.get(vehicleId: string): MopedSpec?
+	local factory = SPEC_FACTORIES[vehicleId]
+	if factory == nil then
+		return nil
+	end
+	return copySpec(factory())
+end
+
+function MopedLayout.isMoped(vehicleId: string): boolean
+	return SPEC_FACTORIES[vehicleId] ~= nil
+end
+
+-- Deterministischer Parkplatz seitlich des Spielers. Puch und Ciao stehen
+-- nebeneinander, damit sie sich beim Kauf nicht ueberlagern.
+function MopedLayout.parkingOffsetFor(vehicleId: string): Vec3?
+	local slot = PARKING_SLOTS[vehicleId]
+	if slot == nil then
+		return nil
+	end
+	return vec(slot * MopedLayout.SPAWN_SPACING, 0, 0)
+end
+
+function MopedLayout.validate(): boolean
+	for vehicleId, factory in SPEC_FACTORIES do
+		local spec = factory()
+		assert(spec.vehicleId == vehicleId, string.format("moped '%s' has mismatched id", vehicleId))
+		assert(spec.primaryPart == MopedLayout.PRIMARY_PART, string.format("moped '%s' must use Drive pivot", vehicleId))
+		assert(spec.seatName == MopedLayout.SEAT_NAME, string.format("moped '%s' must expose Seat", vehicleId))
+
+		local names: { [string]: boolean } = {}
+		for _, entry in ipairs(spec.parts) do
+			assert(entry.name ~= "", string.format("moped '%s' has an unnamed part", vehicleId))
+			assert(names[entry.name] == nil, string.format("moped '%s' duplicates part '%s'", vehicleId, entry.name))
+			names[entry.name] = true
+			assert(entry.size.x > 0 and entry.size.y > 0 and entry.size.z > 0, string.format("moped '%s' part '%s' has non-positive size", vehicleId, entry.name))
+			assert(entry.shape == "Block" or entry.shape == "Cylinder", string.format("moped '%s' part '%s' has invalid shape", vehicleId, entry.name))
+			assert(entry.transparency >= 0 and entry.transparency <= 1, string.format("moped '%s' part '%s' has invalid transparency", vehicleId, entry.name))
+		end
+		for _, required in MopedLayout.REQUIRED_PARTS do
+			assert(names[required] == true, string.format("moped '%s' misses part '%s'", vehicleId, required))
+		end
+		assert(MopedLayout.parkingOffsetFor(vehicleId) ~= nil, string.format("moped '%s' misses a parking slot", vehicleId))
+	end
+	return true
+end
+
+assert(MopedLayout.validate(), "MopedLayout failed validation on load")
+
+return MopedLayout
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="35">
+          <Properties>
+            <string name="Name">MopedSpawner</string>
+            <string name="Source"><![CDATA[--!strict
+-- MopedSpawner: erzeugt pro Spieler und gekauftem Mofa genau ein verankertes
+-- Model in Workspace.ToeffliTalVehicles. Preise, Besitz und Auswahl bleiben
+-- serverseitig; dieses Modul baut nur Geometrie und Attribute.
+-- Keine Roblox-Simulation, keine Wheel-Drives und keine Clientwerte.
+
+local CollectionService = game:GetService("CollectionService")
+
+local VehicleCatalog = require("../../shared/data/VehicleCatalog")
+local MopedLayout = require(script.Parent.MopedLayout)
+local TerrainHeight = require("../world/TerrainHeight")
+local VehicleAssembly = require(script.Parent.VehicleAssembly)
+
+local MopedSpawner = {}
+
+local FOLDER_NAME = "ToeffliTalVehicles"
+local DEFAULT_SPAWN = CFrame.new(0, 5, 0)
+local SPAWN_SIDE_OFFSET = 3
+local SPAWN_BACK_OFFSET = 3
+local SPAWN_RAY_UP = 512
+local SPAWN_RAY_DOWN = 1024
+
+local function getFolder(): Folder
+	local existing = workspace:FindFirstChild(FOLDER_NAME)
+	if existing ~= nil and existing:IsA("Folder") then
+		return existing
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = FOLDER_NAME
+	folder.Parent = workspace
+	return folder
+end
+
+local function makePart(spec: MopedLayout.PartSpec, base: CFrame): BasePart
+	local part = Instance.new("Part")
+	part.Name = spec.name
+	part.Size = Vector3.new(spec.size.x, spec.size.y, spec.size.z)
+	part.CFrame = base * CFrame.new(spec.offset.x, spec.offset.y, spec.offset.z)
+	part.Color = Color3.fromRGB(spec.color.r, spec.color.g, spec.color.b)
+	part.Transparency = spec.transparency
+	part.Anchored = true
+	part.CanCollide = spec.canCollide
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	if spec.shape == "Cylinder" then
+		part.Shape = Enum.PartType.Cylinder
+	end
+	return part
+end
+
+local function makeSeat(spec: MopedLayout.PartSpec, base: CFrame): VehicleSeat
+	local seat = Instance.new("VehicleSeat")
+	seat.Name = spec.name
+	seat.Size = Vector3.new(spec.size.x, spec.size.y, spec.size.z)
+	seat.CFrame = base * CFrame.new(spec.offset.x, spec.offset.y, spec.offset.z)
+	seat.Color = Color3.fromRGB(spec.color.r, spec.color.g, spec.color.b)
+	seat.Transparency = spec.transparency
+	seat.Anchored = true
+	seat.CanCollide = false
+	-- Nur E darf aufsteigen; kein automatisches Aufsitzen beim Beruehren.
+	seat.Disabled = true
+	seat.TopSurface = Enum.SurfaceType.Smooth
+	seat.BottomSurface = Enum.SurfaceType.Smooth
+	return seat
+end
+
+local function weldTo(main: BasePart, other: BasePart, parent: Model): ()
+	if other == main then
+		return
+	end
+	local weld = Instance.new("WeldConstraint")
+	weld.Name = string.format("Weld_%s", other.Name)
+	weld.Part0 = main
+	weld.Part1 = other
+	weld.Parent = parent
+end
+
+local function flatForward(look: Vector3): Vector3
+	local flat = Vector3.new(look.X, 0, look.Z)
+	if flat.Magnitude < 0.001 then
+		return Vector3.new(0, 0, -1)
+	end
+	return flat.Unit
+end
+
+-- Setzt das Mofa seitlich hinter den Spieler auf den tatsaechlichen Boden.
+-- Der Strahl startet bewusst sehr hoch, damit er unabhaengig davon trifft,
+-- wo der Charakter gerade schwebt oder faellt.
+local function resolveSpawnCFrame(player: Player, spec: MopedLayout.MopedSpec): CFrame
+	local character = player.Character
+	local ref = DEFAULT_SPAWN
+	if character ~= nil then
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root ~= nil and root:IsA("BasePart") then
+			ref = (root :: BasePart).CFrame
+		end
+	end
+	local forward = flatForward(ref.LookVector)
+	local right = Vector3.new(-forward.Z, 0, forward.X)
+	local parking = MopedLayout.parkingOffsetFor(spec.vehicleId)
+	local sideways = SPAWN_SIDE_OFFSET
+	if parking ~= nil then
+		sideways += parking.x
+	end
+	local target = ref.Position + right * sideways + forward * -SPAWN_BACK_OFFSET
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.RespectCanCollide = true
+	local folder = workspace:FindFirstChild(FOLDER_NAME)
+	local filters: { Instance } = {}
+	if character ~= nil then
+		table.insert(filters, character)
+	end
+	if folder ~= nil then
+		table.insert(filters, folder)
+	end
+	params.FilterDescendantsInstances = filters
+
+	local origin = Vector3.new(target.X, SPAWN_RAY_UP, target.Z)
+	local hit = workspace:Raycast(origin, Vector3.new(0, -SPAWN_RAY_DOWN, 0), params)
+	local groundY = if hit ~= nil then hit.Position.Y else TerrainHeight.heightAt(target.X, target.Z)
+	local pivot = Vector3.new(target.X, groundY + MopedLayout.PIVOT_HEIGHT + 0.5, target.Z)
+	return CFrame.lookAt(pivot, pivot + forward)
+end
+
+local function matchesOwner(child: Instance, player: Player): boolean
+	if child:GetAttribute("OwnerPlayerUserId") == player.UserId then
+		return true
+	end
+	if child:GetAttribute("OwnerUserId") == player.UserId then
+		return true
+	end
+	local suffix = "_" .. tostring(player.UserId)
+	return string.sub(child.Name, -#suffix) == suffix
+end
+
+local function releaseVehicle(player: Player, vehicleId: string): ()
+	local folder = workspace:FindFirstChild(FOLDER_NAME)
+	if folder == nil then
+		return
+	end
+	for _, child in folder:GetChildren() do
+		if matchesOwner(child, player) and child:GetAttribute("VehicleId") == vehicleId then
+			child:Destroy()
+		end
+	end
+end
+
+function MopedSpawner.createForPlayer(
+	player: Player,
+	vehicleId: string,
+	ownerUserId: number?
+): Model?
+	local definition = VehicleCatalog.get(vehicleId)
+	local spec = MopedLayout.get(vehicleId)
+	if definition == nil or spec == nil or definition.Class ~= "moped" then
+		return nil
+	end
+
+	releaseVehicle(player, vehicleId)
+	local folder = getFolder()
+	local base = resolveSpawnCFrame(player, spec)
+
+	local model = Instance.new("Model")
+	model.Name = string.format("Moped_%s_%d", vehicleId, player.UserId)
+
+	local drive: BasePart? = nil
+	local seat: VehicleSeat? = nil
+	for _, entry in ipairs(spec.parts) do
+		local part: BasePart
+		if entry.name == spec.seatName then
+			local vehicleSeat = makeSeat(entry, base)
+			seat = vehicleSeat
+			part = vehicleSeat
+		else
+			part = makePart(entry, base)
+		end
+		part.Parent = model
+		if entry.name == spec.primaryPart then
+			drive = part
+		else
+			part.Massless = true
+		end
+	end
+
+	if drive == nil or seat == nil then
+		model:Destroy()
+		return nil
+	end
+	model.PrimaryPart = drive
+
+	for _, child in model:GetChildren() do
+		if child:IsA("BasePart") then
+			weldTo(drive, child, model)
+		end
+	end
+
+	model:SetAttribute("VehicleId", vehicleId)
+	model:SetAttribute("ModelId", vehicleId)
+	model:SetAttribute("OwnerUserId", ownerUserId or player.UserId)
+	model:SetAttribute("OwnerPlayerUserId", player.UserId)
+	model:SetAttribute("IsMoped", true)
+	model:SetAttribute("TopSpeedKmh", definition.Physics.TopSpeedKmh)
+	model:SetAttribute("Acceleration", definition.Physics.Acceleration)
+	model:SetAttribute("Braking", definition.Physics.Braking)
+	model:SetAttribute("Handling", definition.Physics.Handling)
+	model:SetAttribute("TankLiters", definition.Fuel.TankLiters)
+	model:SetAttribute("FuelConsumptionPerSecond", 0.005)
+	CollectionService:AddTag(model, MopedLayout.TAG_NAME)
+
+	model.Parent = folder
+	VehicleAssembly.watch(player, model, drive, seat)
+
+	print(string.format(
+		"[ToeffliTal][Spawn] %s bei %.1f/%.1f/%.1f",
+		model.Name,
+		base.X,
+		base.Y,
+		base.Z
+	))
+
+	return model
+end
+
+function MopedSpawner.releaseForPlayer(player: Player): ()
+	local folder = workspace:FindFirstChild(FOLDER_NAME)
+	if folder == nil then
+		return
+	end
+	for _, child in folder:GetChildren() do
+		if child:GetAttribute("IsMoped") == true and matchesOwner(child, player) then
+			child:Destroy()
+		end
+	end
+end
+
+return MopedSpawner
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="36">
+          <Properties>
+            <string name="Name">VehicleAssembly</string>
+            <string name="Source"><![CDATA[--!strict
+-- VehicleAssembly: serverautoritative Physik-Huelle fuer Fahrrad und Mofa.
+-- Im Stand bleibt das Modell verankert (stabil, kein Wegrollen). Sobald der
+-- Spieler auf dem Sitz Platz nimmt, wird das gesamte Assembly entankert und
+-- der Engine-Physik uebergeben; beim Absteigen wird es an der aktuellen
+-- Position wieder verankert.
+-- Eine serverseitige AlignOrientation haelt das Fahrzeug IMMER aufrecht –
+-- auch falls der Client (noch) keinen Netzwerkbesitz hat.
+-- Keine Preise, kein Besitz, keine Clientwerte.
+
+local VehicleAssembly = {}
+
+function VehicleAssembly.setAnchored(model: Model, anchored: boolean): ()
+	for _, child in model:GetChildren() do
+		if child:IsA("BasePart") then
+			child.Anchored = anchored
+		end
+	end
+end
+
+-- Aufrechte Stabilisierung, repliziert vom Server. Der Client darf die
+-- Zielausrichtung lokal nachfuehren (Gier/Pitch), wenn er die Assembly besitzt.
+function VehicleAssembly.setupStabilizer(drive: BasePart): ()
+	if drive:FindFirstChild("ToeffliDriveAttachment") ~= nil then
+		return
+	end
+	local attachment = Instance.new("Attachment")
+	attachment.Name = "ToeffliDriveAttachment"
+	attachment.Parent = drive
+
+	local yaw = 0
+	local ok, _, yawValue = pcall(function()
+		return drive.CFrame:ToEulerAnglesYXZ()
+	end)
+	if ok and typeof(yawValue) == "number" then
+		yaw = yawValue
+	end
+
+	local align = Instance.new("AlignOrientation")
+	align.Name = "ToeffliAlign"
+	align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	align.Attachment0 = attachment
+	align.RigidityEnabled = true
+	align.CFrame = CFrame.new(drive.Position) * CFrame.Angles(0, yaw, 0)
+	align.Parent = drive
+end
+
+-- Beobachtet den Sitz und schaltet die Physik nur waehrend der Fahrt frei.
+function VehicleAssembly.watch(player: Player, model: Model, drive: BasePart, seat: VehicleSeat): ()
+	VehicleAssembly.setupStabilizer(drive)
+	VehicleAssembly.setAnchored(model, true)
+
+	local active = false
+	local function setActive(occupied: boolean): ()
+		if occupied == active then
+			return
+		end
+		active = occupied
+		if occupied then
+			-- Zielausrichtung auf die aktuelle Gier setzen, damit das Fahrzeug
+			-- beim Entankern nicht auf die Spawn-Richtung zurueckschnappt.
+			local align = drive:FindFirstChild("ToeffliAlign")
+			if align ~= nil and align:IsA("AlignOrientation") then
+				local ok, _, yaw = pcall(function()
+					return drive.CFrame:ToEulerAnglesYXZ()
+				end)
+				if ok and typeof(yaw) == "number" then
+					align.CFrame = CFrame.new(drive.Position) * CFrame.Angles(0, yaw, 0)
+				end
+			end
+			VehicleAssembly.setAnchored(model, false)
+			-- Eigentuemer der Physik-Assembly: der aufgesessene Spieler.
+			pcall(function()
+				drive:SetNetworkOwner(player)
+			end)
+		else
+			VehicleAssembly.setAnchored(model, true)
+		end
+	end
+
+	local function bindCharacter(character: Model): ()
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		if humanoid == nil or not humanoid:IsA("Humanoid") then
+			return
+		end
+		humanoid.Seated:Connect(function(occupied: boolean, seatPart: BasePart?)
+			if not model:IsDescendantOf(workspace) then
+				return
+			end
+			if occupied and seatPart == seat then
+				setActive(true)
+			elseif not occupied and seat.Occupant == nil then
+				setActive(false)
+			end
+		end)
+	end
+
+	if player.Character ~= nil then
+		bindCharacter(player.Character)
+	end
+	player.CharacterAdded:Connect(bindCharacter)
+end
+
+return VehicleAssembly
+]]></string>
+          </Properties>
+        </Item>
       </Item>
-      <Item class="Folder" referent="34">
+      <Item class="Folder" referent="37">
         <Properties>
           <string name="Name">world</string>
         </Properties>
-        <Item class="ModuleScript" referent="35">
+        <Item class="ModuleScript" referent="38">
           <Properties>
             <string name="Name">AtmosphereBuilder</string>
             <string name="Source">--!strict
@@ -6520,15 +7381,13 @@ end
 return AtmosphereBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="36">
+        <Item class="ModuleScript" referent="39">
           <Properties>
             <string name="Name">BridgeBuilder</string>
             <string name="Source"><![CDATA[--!strict
 -- BridgeBuilder: flache Bruecken an allen Wasserquerungen (BRIDGE_CROSSINGS).
--- Jede Bruecke verbindet die Fahrbahn stufenlos, besitzt sichtbare seitliche
--- Begrenzungen und liegt vollstaendig ueber dem Wasser. Das Deck ist horizontal
--- (nur Yaw), damit Auffahrten mit Fahrrad und Mofa flach befahrbar bleiben.
--- Keine Schilder, keine Kollision mit Bachufern.
+-- Das Deck liegt buendig auf der in das Terrain gemalten Strasse und besitzt
+-- sichtbare seitliche Begrenzungen. Keine Schilder.
 
 local function requireSibling(name: string): any
 	local ok, module = pcall(require, "./" .. name)
@@ -6540,11 +7399,10 @@ end
 
 local WorldZones = requireSibling("WorldZones")
 local TerrainHeight = requireSibling("TerrainHeight")
+local RoadSurface = requireSibling("RoadSurface")
 
 local BridgeBuilder = {}
 
-local DECK_THICKNESS = 1
-local DECK_Y_OFFSET = 0.6
 local RAIL_WIDTH = 0.6
 local RAIL_HEIGHT = 1.2
 local DECK_COLOR = Color3.fromRGB(70, 70, 75)
@@ -6555,8 +7413,7 @@ local function makePart(
 	name: string,
 	size: Vector3,
 	cframe: CFrame,
-	color: Color3,
-	canCollide: boolean
+	color: Color3
 ): Part
 	local part = Instance.new("Part")
 	part.Name = name
@@ -6567,8 +7424,8 @@ local function makePart(
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.Anchored = true
-	part.CanCollide = canCollide
-	part.CanQuery = false
+	part.CanCollide = true
+	part.CanQuery = true
 	part.CanTouch = false
 	part.Parent = parent
 	return part
@@ -6582,31 +7439,30 @@ function BridgeBuilder.build(parent: Instance): Folder
 	for _, crossing in WorldZones.BRIDGE_CROSSINGS do
 		local position = crossing.position
 		local yaw = math.rad(crossing.yaw)
-		local deckY = TerrainHeight.heightAt(position.x, position.z) + DECK_Y_OFFSET
-		local base = CFrame.new(Vector3.new(position.x, deckY, position.z)) * CFrame.Angles(0, yaw, 0)
+		local surface = RoadSurface.cellTop(TerrainHeight.heightAt(position.x, position.z))
+		local centerY = surface + 0.02 - RoadSurface.BRIDGE_THICKNESS / 2
+		local base = CFrame.new(Vector3.new(position.x, centerY, position.z)) * CFrame.Angles(0, yaw, 0)
 
 		local deck = makePart(
 			root,
 			crossing.id,
-			Vector3.new(crossing.width, DECK_THICKNESS, crossing.length),
+			Vector3.new(crossing.width, RoadSurface.BRIDGE_THICKNESS, crossing.length),
 			base,
-			DECK_COLOR,
-			true
+			DECK_COLOR
 		)
 		deck:SetAttribute("BridgeId", crossing.id)
 		deck:SetAttribute("RoadId", crossing.roadId)
 		deck:SetAttribute("WaterId", crossing.waterId)
 
 		local railOffsetX = crossing.width / 2 - RAIL_WIDTH / 2
-		local railLift = DECK_THICKNESS / 2 + RAIL_HEIGHT / 2
+		local railLift = RoadSurface.BRIDGE_THICKNESS / 2 + RAIL_HEIGHT / 2
 		for _, side in { -1, 1 } do
 			local rail = makePart(
 				root,
 				string.format("%s_Rail_%s", crossing.id, if side < 0 then "A" else "B"),
 				Vector3.new(RAIL_WIDTH, RAIL_HEIGHT, crossing.length),
 				base * CFrame.new(railOffsetX * side, railLift, 0),
-				RAIL_COLOR,
-				true
+				RAIL_COLOR
 			)
 			rail:SetAttribute("BridgeId", crossing.id)
 			rail:SetAttribute("RoadId", crossing.roadId)
@@ -6622,7 +7478,7 @@ return BridgeBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="37">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">BuildingFactory</string>
             <string name="Source"><![CDATA[--!strict
@@ -6631,7 +7487,12 @@ return BridgeBuilder
 -- Bodenbasis Y=0 (Front = -Z); die Positionierung uebernimmt VillageBuilder.
 -- Jedes Haus besitzt sichtbare Eingangstuer, Fenster und eindeutige Dekoration.
 
+local BuildingPlacement = require(script.Parent.BuildingPlacement)
+
 local BuildingFactory = {}
+
+-- Einheitlicher Vergroesserungsfaktor fuer alle Haeuser.
+BuildingFactory.SCALE = 1.7
 
 local function pickString(definition: { [string]: any }, keys: { string }, fallback: string): string
 	local value: any = nil
@@ -6894,6 +7755,10 @@ function BuildingFactory.create(definition: { [string]: any }): Model
 		model:SetAttribute("DesignSignature", signature)
 	end
 
+	-- Einheitlich vergroessern und Basis exakt auf den lokalen Ursprung legen.
+	BuildingPlacement.scale(model, BuildingFactory.SCALE)
+	BuildingPlacement.ground(model, 0)
+
 	return model
 end
 
@@ -6901,7 +7766,80 @@ return BuildingFactory
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="38">
+        <Item class="ModuleScript" referent="41">
+          <Properties>
+            <string name="Name">BuildingPlacement</string>
+            <string name="Source"><![CDATA[--!strict
+-- BuildingPlacement: gemeinsames Vergroessern und Aufsetzen von Gebaeuden.
+-- Modelle werden um einen einheitlichen Faktor skaliert und so verschoben,
+-- dass ihre tiefste Stelle exakt auf dem Boden liegt. Keine Preise, keine
+-- Gameplay-Logik, keine globalen Variablen.
+
+local BuildingPlacement = {}
+
+-- Tatsaechliche Bodenhoehe an (x, z) per Raycast (Terrain, Wasser, Parts).
+-- Zur Bauzeit gibt es noch keine Fahrzeuge/Charaktere, daher ohne Filter.
+function BuildingPlacement.surfaceAt(x: number, z: number): number?
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = {}
+	params.IgnoreWater = false
+	local hit = workspace:Raycast(Vector3.new(x, 512, z), Vector3.new(0, -1024, 0), params)
+	if hit ~= nil then
+		return hit.Position.Y
+	end
+	return nil
+end
+
+-- Tiefste Stelle des Modells in Weltkoordinaten.
+function BuildingPlacement.lowestY(model: Model): number?
+	local lowest: number? = nil
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") then
+			local bottom = (part.CFrame * CFrame.new(0, -part.Size.Y / 2, 0)).Position.Y
+			if lowest == nil or bottom < lowest then
+				lowest = bottom
+			end
+		end
+	end
+	return lowest
+end
+
+-- Skaliert das Modell einheitlich (idempotent genug fuer den Weltaufbau).
+function BuildingPlacement.scale(model: Model, factor: number): ()
+	if factor ~= 1 then
+		model:ScaleTo(factor)
+	end
+end
+
+-- Verschiebt das Modell vertikal so, dass die tiefste Stelle auf `groundY` liegt.
+function BuildingPlacement.ground(model: Model, groundY: number): ()
+	local lowest = BuildingPlacement.lowestY(model)
+	if lowest == nil then
+		return
+	end
+	model:TranslateBy(Vector3.new(0, groundY - lowest, 0))
+end
+
+-- Setzt ein am Ursprung gebautes Modell auf `groundY` an (x, z) mit Yaw.
+-- Der Pivot-Abstand des Modells bleibt erhalten, damit die Basis bündig ist.
+function BuildingPlacement.placeOnGround(
+	model: Model,
+	x: number,
+	z: number,
+	groundY: number,
+	yawDegrees: number
+): ()
+	local pivot = model:GetPivot()
+	local target = CFrame.new(x, groundY, z) * CFrame.Angles(0, math.rad(yawDegrees), 0)
+	model:PivotTo(target * pivot)
+end
+
+return BuildingPlacement
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="42">
           <Properties>
             <string name="Name">ChurchBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -6919,8 +7857,12 @@ end
 
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local ChurchBuilder = {}
+
+-- Einheitlicher Vergroesserungsfaktor fuer die Kirche.
+local CHURCH_SCALE = 1.7
 
 local WALL_COLOR = Color3.fromRGB(235, 230, 220)
 local ROOF_COLOR = Color3.fromRGB(140, 60, 50)
@@ -6954,7 +7896,8 @@ end
 -- Erzeugt genau ein Kirchen-Model an der vorgesehenen Position.
 function ChurchBuilder.build(parent: Instance): Model
 	local church = WorldLayout.CHURCH
-	local groundY = TerrainHeight.heightAt(church.position.x, church.position.z)
+	local groundY = BuildingPlacement.surfaceAt(church.position.x, church.position.z)
+		or TerrainHeight.heightAt(church.position.x, church.position.z)
 	local base = CFrame.new(Vector3.new(church.position.x, groundY, church.position.z))
 		* CFrame.Angles(0, math.rad(church.yaw), 0)
 
@@ -6998,6 +7941,8 @@ function ChurchBuilder.build(parent: Instance): Model
 	model:SetAttribute("ChurchId", church.id)
 	model:SetAttribute("PoiKind", "church")
 	model.PrimaryPart = nave
+	BuildingPlacement.scale(model, CHURCH_SCALE)
+	BuildingPlacement.ground(model, groundY)
 	model.Parent = parent
 	return model
 end
@@ -7006,7 +7951,7 @@ return ChurchBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="43">
           <Properties>
             <string name="Name">ConiferFactory</string>
             <string name="Source">--!strict
@@ -7101,7 +8046,7 @@ end
 return ConiferFactory</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="44">
           <Properties>
             <string name="Name">DonerShopBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -7120,8 +8065,13 @@ end
 
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local DonerShopBuilder = {}
+
+-- Vergroesserungsfaktor des Ladens; der Abholpunkt wird danach exakt
+-- zurueckgesetzt, damit Lieferungen unveraendert bleiben.
+local SHOP_SCALE = 1.5
 
 local SHOP_NAME = "DonerShop"
 local SIGN_TEXT = "Döner Laden"
@@ -7193,8 +8143,10 @@ function DonerShopBuilder.build(parent: Instance): Model
 	local pickupX: number = pickup.x
 	local pickupZ: number = pickup.z
 
-	local groundY = TerrainHeight.heightAt(centerX, centerZ)
-	local pickupGroundY = TerrainHeight.heightAt(pickupX, pickupZ)
+	local groundY = BuildingPlacement.surfaceAt(centerX, centerZ)
+		or TerrainHeight.heightAt(centerX, centerZ)
+	local pickupGroundY = BuildingPlacement.surfaceAt(pickupX, pickupZ)
+		or TerrainHeight.heightAt(pickupX, pickupZ)
 
 	local model = Instance.new("Model")
 	model.Name = SHOP_NAME
@@ -7430,6 +8382,11 @@ function DonerShopBuilder.build(parent: Instance): Model
 	pickupPad:SetAttribute("PickupKind", "doner")
 
 	model.PrimaryPart = floorPart
+	BuildingPlacement.scale(model, SHOP_SCALE)
+	BuildingPlacement.ground(model, groundY)
+	-- Abholpunkt darf nicht mitskaliert werden (Lieferziele bleiben exakt).
+	pickupPad.Size = Vector3.new(6, 0.4, 6)
+	pickupPad.Position = Vector3.new(pickupX, pickupGroundY + 0.2, pickupZ)
 	model.Parent = parent
 	return model
 end
@@ -7438,7 +8395,7 @@ return DonerShopBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">GarageFactory</string>
             <string name="Source">--!strict
@@ -7447,7 +8404,13 @@ return DonerShopBuilder
 -- Nur Name und Anker-Attribut variieren; alle Abmessungen, Materialien, Farben
 -- und die Teilezahl sind deterministisch identisch.
 
+local BuildingPlacement = require(script.Parent.BuildingPlacement)
+
 local GarageFactory = {}
+
+-- Einheitlicher Vergroesserungsfaktor fuer alle Garagen (moderat, damit die
+-- reservierten Abstaende zu Strassen und Nachbarn erhalten bleiben).
+GarageFactory.SCALE = 1.4
 
 local FLOOR_COLOR = Color3.fromRGB(145, 145, 150)
 local WALL_COLOR = Color3.fromRGB(205, 205, 212)
@@ -7671,13 +8634,17 @@ function GarageFactory.create(anchorName: string): Model
 
 	model.PrimaryPart = floor
 
+	-- Einheitlich vergroessern und Basis exakt auf den lokalen Ursprung legen.
+	BuildingPlacement.scale(model, GarageFactory.SCALE)
+	BuildingPlacement.ground(model, 0)
+
 	return model
 end
 
 return GarageFactory</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">GarageWorldBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -7699,6 +8666,7 @@ end
 
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local GarageWorldBuilder = {}
 
@@ -7757,8 +8725,6 @@ function GarageWorldBuilder.build(parent: Instance): Folder
 	local folder = Instance.new("Folder")
 	folder.Name = GarageWorldBuilder.FOLDER_NAME
 
-	local floorOffset = GarageWorldBuilder.FLOOR_THICKNESS / 2
-
 	for index, placement in GarageWorldBuilder.calculatePlacements() do
 		local model = GarageFactory.create(placement.anchorName)
 		model.Name = placement.id
@@ -7766,9 +8732,14 @@ function GarageWorldBuilder.build(parent: Instance): Folder
 		model:SetAttribute("GarageIndex", index)
 		model:SetAttribute("AnchorName", placement.anchorName)
 		model:SetAttribute("AngleDegrees", placement.angleDegrees)
-		model:PivotTo(
-			CFrame.new(placement.position.x, placement.position.y + floorOffset, placement.position.z)
-				* CFrame.Angles(0, math.rad(placement.yaw), 0)
+		local groundY = BuildingPlacement.surfaceAt(placement.position.x, placement.position.z)
+			or placement.position.y
+		BuildingPlacement.placeOnGround(
+			model,
+			placement.position.x,
+			placement.position.z,
+			groundY,
+			placement.yaw
 		)
 		model.Parent = folder
 	end
@@ -7781,7 +8752,7 @@ return GarageWorldBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">GrassFieldBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -8099,15 +9070,13 @@ return GrassFieldBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">IntersectionBuilder</string>
             <string name="Source"><![CDATA[--!strict
--- IntersectionBuilder: Stopstrassen mit Haltelinie sowie flache, befahrbare Kreisel.
--- Baut alle Stopstrassen (STOP_ROADS) und Kreisel (ROUNDABOUTS) aus WorldZones.
--- Stopstrassen folgen dem Terrain und besitzen eine gut sichtbare Haltelinie.
--- Kreisel sind flach (eine Hoehe), befahrbar und enthalten keinen Mittelstreifen.
--- Keine Bruecken, keine Verkehrszeichen.
+-- IntersectionBuilder: zeichnet nur noch die Haltelinien der Stopstrassen.
+-- Stopstrassen und Kreisel selbst sind buendig in das Terrain gemalt
+-- (RoadPainter). Keine Bruecken, keine Verkehrszeichen.
 
 local function requireSibling(name: string): any
 	local ok, module = pcall(require, "./" .. name)
@@ -8119,28 +9088,21 @@ end
 
 local WorldZones = requireSibling("WorldZones")
 local TerrainHeight = requireSibling("TerrainHeight")
+local RoadSurface = requireSibling("RoadSurface")
 
 local IntersectionBuilder = {}
 
-local ROAD_COLOR = Color3.fromRGB(70, 70, 75)
 local LINE_COLOR = Color3.fromRGB(240, 240, 240)
-local ROAD_THICKNESS = 1
-local ROAD_Y_OFFSET = 0.6
 local STOP_LINE_WIDTH_FACTOR = 0.8
 local STOP_LINE_LENGTH = 1.2
-local STOP_LINE_THICKNESS = 0.12
-local STOP_LINE_LIFT = 0.08
-local STEP_LENGTH = 12
-local MAX_STEPS = 64
-local JOINT_OVERLAP = 0.6
+local STOP_LINE_THICKNESS = 0.1
 
 local function makePart(
 	parent: Instance,
 	name: string,
 	size: Vector3,
 	cframe: CFrame,
-	color: Color3,
-	canCollide: boolean
+	color: Color3
 ): Part
 	local part = Instance.new("Part")
 	part.Name = name
@@ -8151,109 +9113,43 @@ local function makePart(
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.Anchored = true
-	part.CanCollide = canCollide
+	part.CanCollide = false
 	part.CanQuery = false
 	part.CanTouch = false
 	part.Parent = parent
 	return part
 end
 
-local function buildStopRoad(folder: Instance, road: any)
-	local fromX: number = road.from.x
-	local fromZ: number = road.from.z
-	local toX: number = road.to.x
-	local toZ: number = road.to.z
-	local width: number = road.width
-	local dx = toX - fromX
-	local dz = toZ - fromZ
-	local length2D = math.sqrt(dx * dx + dz * dz)
-	if length2D < 0.1 then
+local function buildStopLine(folder: Instance, road: any): ()
+	local stopPos: any = road.stopLinePosition
+	if stopPos == nil then
 		return
 	end
-	local steps = math.clamp(math.ceil(length2D / STEP_LENGTH), 1, MAX_STEPS)
-	for i = 0, steps - 1 do
-		local t0 = i / steps
-		local t1 = (i + 1) / steps
-		local x0 = fromX + dx * t0
-		local z0 = fromZ + dz * t0
-		local x1 = fromX + dx * t1
-		local z1 = fromZ + dz * t1
-		local h0 = TerrainHeight.heightAt(x0, z0) + ROAD_Y_OFFSET
-		local h1 = TerrainHeight.heightAt(x1, z1) + ROAD_Y_OFFSET
-		local p0 = Vector3.new(x0, h0, z0)
-		local p1 = Vector3.new(x1, h1, z1)
-		local delta = p1 - p0
-		local segLength = delta.Magnitude
-		if segLength < 0.1 then
-			segLength = 0.1
-		end
-		local center = (p0 + p1) / 2
-		local look = CFrame.lookAt(center, p1)
-		makePart(
-			folder,
-			string.format("%s_%02d", road.id, i + 1),
-			Vector3.new(width, ROAD_THICKNESS, segLength + JOINT_OVERLAP),
-			look,
-			ROAD_COLOR,
-			true
-		)
+	local width: number = road.width
+	local sx: number = stopPos.x
+	local sz: number = stopPos.z
+	local y = RoadSurface.cellTop(TerrainHeight.heightAt(sx, sz)) + RoadSurface.LINE_LIFT
+	local stopCenter = Vector3.new(sx, y, sz)
+	local direction = Vector3.new(road.to.x - road.from.x, 0, road.to.z - road.from.z)
+	if direction.Magnitude < 0.01 then
+		direction = Vector3.new(0, 0, 1)
 	end
-
-	-- Haltelinie quer zur Fahrtrichtung, gut sichtbar, nicht kollidierbar.
-	local stopPos: any = road.stopLinePosition
-	if stopPos ~= nil then
-		local sx: number = stopPos.x
-		local sz: number = stopPos.z
-		local roadY = TerrainHeight.heightAt(sx, sz) + ROAD_Y_OFFSET
-		local lineY = roadY + ROAD_THICKNESS / 2 + STOP_LINE_LIFT
-		local stopCenter = Vector3.new(sx, lineY, sz)
-		local direction = Vector3.new(dx, 0, dz)
-		if direction.Magnitude < 0.01 then
-			direction = Vector3.new(0, 0, 1)
-		end
-		local lineCFrame = CFrame.lookAt(stopCenter, stopCenter + direction)
-		makePart(
-			folder,
-			string.format("%s_StopLine", road.id),
-			Vector3.new(width * STOP_LINE_WIDTH_FACTOR, STOP_LINE_THICKNESS, STOP_LINE_LENGTH),
-			lineCFrame,
-			LINE_COLOR,
-			false
-		)
-	end
+	local lineCFrame = CFrame.lookAt(stopCenter, stopCenter + direction)
+	makePart(
+		folder,
+		string.format("%s_StopLine", road.id),
+		Vector3.new(width * STOP_LINE_WIDTH_FACTOR, STOP_LINE_THICKNESS, STOP_LINE_LENGTH),
+		lineCFrame,
+		LINE_COLOR
+	)
 end
 
-local function buildRoundabout(folder: Instance, roundabout: any)
-	local cx: number = roundabout.center.x
-	local cz: number = roundabout.center.z
-	local radius: number = roundabout.radius
-	local height = TerrainHeight.heightAt(cx, cz) + ROAD_Y_OFFSET
-	local diameter = radius * 2
-	local disc = Instance.new("Part")
-	disc.Name = roundabout.id
-	disc.Shape = Enum.PartType.Cylinder
-	disc.Size = Vector3.new(ROAD_THICKNESS, diameter, diameter)
-	disc.CFrame = CFrame.new(Vector3.new(cx, height, cz)) * CFrame.Angles(0, 0, math.pi / 2)
-	disc.Color = ROAD_COLOR
-	disc.Material = Enum.Material.SmoothPlastic
-	disc.TopSurface = Enum.SurfaceType.Smooth
-	disc.BottomSurface = Enum.SurfaceType.Smooth
-	disc.Anchored = true
-	disc.CanCollide = true
-	disc.CanQuery = false
-	disc.CanTouch = false
-	disc.Parent = folder
-end
-
--- Erzeugt alle Stopstrassen und Kreisel unter `parent` und gibt den Ordner zurueck.
+-- Erzeugt alle Haltelinien unter `parent` und gibt den Ordner zurueck.
 function IntersectionBuilder.build(parent: Instance): Folder
 	local root = Instance.new("Folder")
 	root.Name = "Intersections"
 	for _, road in WorldZones.STOP_ROADS do
-		buildStopRoad(root, road)
-	end
-	for _, roundabout in WorldZones.ROUNDABOUTS do
-		buildRoundabout(root, roundabout)
+		buildStopLine(root, road)
 	end
 	root.Parent = parent
 	return root
@@ -8263,7 +9159,7 @@ return IntersectionBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="45">
+        <Item class="ModuleScript" referent="49">
           <Properties>
             <string name="Name">PastureBuilder</string>
             <string name="Source">--!strict
@@ -8473,14 +9369,13 @@ end
 return PastureBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="46">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">RoadBuilder</string>
             <string name="Source"><![CDATA[--!strict
--- RoadBuilder: zweispurige Hauptstrassen mit durchgehendem Mittelstreifen.
--- Baut alle Hauptstrassen aus WorldZones (ROAD_SEGMENTS: Ring, Zufahrt, Seestrasse).
--- Jede Fahrbahn folgt dem Terrain (TerrainHeight), Markierungen sind duenn,
--- nicht kollidierbar und ueberhoehen die Fahrbahn nicht.
+-- RoadBuilder: zeichnet nur noch die Mittellinie auf den buendig in das
+-- Terrain gemalten Asphalt (RoadPainter). Die Fahrbahn selbst ist Terrain und
+-- kann daher weder schweben noch im Gras verschwinden.
 -- Keine Stopstrassen, keine Kreisel, keine Bruecken, keine Schilder.
 
 local function requireSibling(name: string): any
@@ -8493,27 +9388,21 @@ end
 
 local WorldZones = requireSibling("WorldZones")
 local TerrainHeight = requireSibling("TerrainHeight")
+local RoadSurface = requireSibling("RoadSurface")
 
 local RoadBuilder = {}
 
-local ROAD_COLOR = Color3.fromRGB(70, 70, 75)
 local CENTER_COLOR = Color3.fromRGB(240, 240, 240)
-local ROAD_THICKNESS = 1
-local ROAD_Y_OFFSET = 0.6
-local CENTER_WIDTH = 0.4
-local CENTER_THICKNESS = 0.12
-local CENTER_LIFT = 0.08
-local STEP_LENGTH = 12
-local MAX_STEPS = 64
-local JOINT_OVERLAP = 0.6
+local CENTER_WIDTH = 0.5
+local CENTER_THICKNESS = 0.1
+local JOINT_OVERLAP = 0.4
 
 local function makePart(
 	parent: Instance,
 	name: string,
 	size: Vector3,
 	cframe: CFrame,
-	color: Color3,
-	canCollide: boolean
+	color: Color3
 ): Part
 	local part = Instance.new("Part")
 	part.Name = name
@@ -8524,14 +9413,14 @@ local function makePart(
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.Anchored = true
-	part.CanCollide = canCollide
+	part.CanCollide = false
 	part.CanQuery = false
 	part.CanTouch = false
 	part.Parent = parent
 	return part
 end
 
-local function buildSegment(folder: Instance, id: string, from: any, to: any, width: number)
+local function buildSegment(folder: Instance, id: string, from: any, to: any)
 	local fromX: number = from.x
 	local fromZ: number = from.z
 	local toX: number = to.x
@@ -8542,7 +9431,7 @@ local function buildSegment(folder: Instance, id: string, from: any, to: any, wi
 	if length2D < 0.1 then
 		return
 	end
-	local steps = math.clamp(math.ceil(length2D / STEP_LENGTH), 1, MAX_STEPS)
+	local steps = RoadSurface.stepsFor(length2D)
 	for i = 0, steps - 1 do
 		local t0 = i / steps
 		local t1 = (i + 1) / steps
@@ -8550,43 +9439,31 @@ local function buildSegment(folder: Instance, id: string, from: any, to: any, wi
 		local z0 = fromZ + dz * t0
 		local x1 = fromX + dx * t1
 		local z1 = fromZ + dz * t1
-		local h0 = TerrainHeight.heightAt(x0, z0) + ROAD_Y_OFFSET
-		local h1 = TerrainHeight.heightAt(x1, z1) + ROAD_Y_OFFSET
-		local p0 = Vector3.new(x0, h0, z0)
-		local p1 = Vector3.new(x1, h1, z1)
-		local delta = p1 - p0
-		local segLength = delta.Magnitude
+		local midX = (x0 + x1) / 2
+		local midZ = (z0 + z1) / 2
+		local y = RoadSurface.cellTop(TerrainHeight.heightAt(midX, midZ)) + RoadSurface.LINE_LIFT
+		local segLength = math.sqrt((x1 - x0) ^ 2 + (z1 - z0) ^ 2)
 		if segLength < 0.1 then
 			segLength = 0.1
 		end
-		local center = (p0 + p1) / 2
-		local look = CFrame.lookAt(center, p1)
-		makePart(
-			folder,
-			string.format("%s_%02d", id, i + 1),
-			Vector3.new(width, ROAD_THICKNESS, segLength + JOINT_OVERLAP),
-			look,
-			ROAD_COLOR,
-			true
-		)
-		local lineCFrame = look * CFrame.new(0, ROAD_THICKNESS / 2 + CENTER_LIFT, 0)
+		local center = Vector3.new(midX, y, midZ)
+		local look = CFrame.lookAt(center, center + Vector3.new(dx, 0, dz))
 		makePart(
 			folder,
 			string.format("%s_Center_%02d", id, i + 1),
 			Vector3.new(CENTER_WIDTH, CENTER_THICKNESS, segLength + JOINT_OVERLAP),
-			lineCFrame,
-			CENTER_COLOR,
-			false
+			look,
+			CENTER_COLOR
 		)
 	end
 end
 
--- Erzeugt alle Hauptstrassen unter `parent` und gibt den Ordner zurueck.
+-- Erzeugt die Mittellinien unter `parent` und gibt den Ordner zurueck.
 function RoadBuilder.build(parent: Instance): Folder
 	local root = Instance.new("Folder")
 	root.Name = "Roads"
 	for _, segment in WorldZones.ROAD_SEGMENTS do
-		buildSegment(root, segment.id, segment.from, segment.to, segment.width)
+		buildSegment(root, segment.id, segment.from, segment.to)
 	end
 	root.Parent = parent
 	return root
@@ -8596,14 +9473,254 @@ return RoadBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="47">
+        <Item class="ModuleScript" referent="51">
+          <Properties>
+            <string name="Name">RoadPainter</string>
+            <string name="Source"><![CDATA[--!strict
+-- RoadPainter: faerbt die oberste Terrain-Voxelreihe entlang aller Strassen,
+-- Stopstrassen und Kreisel mit Material Asphalt. Dadurch liegt die Strasse
+-- exakt buendig auf der Karte und kann weder schweben noch im Gras versinken.
+-- Keine Parts, keine Preise, keine Gameplay-Logik, keine globalen Variablen.
+
+local function requireSibling(name: string): any
+	local ok, module = pcall(require, "./" .. name)
+	if ok then
+		return module
+	end
+	return require(script.Parent[name])
+end
+
+local WorldZones = requireSibling("WorldZones")
+local TerrainHeight = requireSibling("TerrainHeight")
+local RoadSurface = requireSibling("RoadSurface")
+
+local RoadPainter = {}
+
+local function distanceToSegment(
+	px: number,
+	pz: number,
+	ax: number,
+	az: number,
+	bx: number,
+	bz: number
+): number
+	local dx = bx - ax
+	local dz = bz - az
+	local lengthSquared = dx * dx + dz * dz
+	local t = 0
+	if lengthSquared > 0 then
+		t = math.clamp(((px - ax) * dx + (pz - az) * dz) / lengthSquared, 0, 1)
+	end
+	local cx = ax + dx * t
+	local cz = az + dz * t
+	return math.sqrt((px - cx) ^ 2 + (pz - cz) ^ 2)
+end
+
+local function paintCell(terrain: Terrain, cx: number, cz: number): ()
+	local top = RoadSurface.cellTop(TerrainHeight.heightAt(cx, cz))
+	local size = Vector3.new(
+		RoadSurface.paintSize(),
+		RoadSurface.paintSize(),
+		RoadSurface.paintSize()
+	)
+	terrain:FillBlock(CFrame.new(cx, top - RoadSurface.VOXEL / 2, cz), size, Enum.Material.Asphalt)
+end
+
+-- Zellenraster auf das globale 4-Studs-Voxelraster ausrichten.
+local function firstCell(minValue: number): number
+	return math.floor(minValue / RoadSurface.VOXEL) * RoadSurface.VOXEL + RoadSurface.VOXEL / 2
+end
+
+local function paintSegment(
+	terrain: Terrain,
+	ax: number,
+	az: number,
+	bx: number,
+	bz: number,
+	width: number
+): ()
+	local half = width / 2 + 0.01
+	local minX = math.min(ax, bx) - half
+	local maxX = math.max(ax, bx) + half
+	local minZ = math.min(az, bz) - half
+	local maxZ = math.max(az, bz) + half
+
+	local x = firstCell(minX)
+	while x <= maxX do
+		local z = firstCell(minZ)
+		while z <= maxZ do
+			if distanceToSegment(x, z, ax, az, bx, bz) <= half then
+				paintCell(terrain, x, z)
+			end
+			z += RoadSurface.VOXEL
+		end
+		x += RoadSurface.VOXEL
+	end
+end
+
+local function paintRoundabout(terrain: Terrain, centerX: number, centerZ: number, radius: number): ()
+	local reach = radius + 0.01
+	local minX = centerX - reach
+	local maxX = centerX + reach
+	local minZ = centerZ - reach
+	local maxZ = centerZ + reach
+
+	local x = firstCell(minX)
+	while x <= maxX do
+		local z = firstCell(minZ)
+		while z <= maxZ do
+			local dx = x - centerX
+			local dz = z - centerZ
+			if math.sqrt(dx * dx + dz * dz) <= reach then
+				paintCell(terrain, x, z)
+			end
+			z += RoadSurface.VOXEL
+		end
+		x += RoadSurface.VOXEL
+	end
+end
+
+function RoadPainter.paint(terrain: Terrain): ()
+	for _, road in WorldZones.ROAD_SEGMENTS do
+		paintSegment(terrain, road.from.x, road.from.z, road.to.x, road.to.z, road.width)
+	end
+	for _, road in WorldZones.STOP_ROADS do
+		paintSegment(terrain, road.from.x, road.from.z, road.to.x, road.to.z, road.width)
+	end
+	for _, roundabout in WorldZones.ROUNDABOUTS do
+		paintRoundabout(terrain, roundabout.center.x, roundabout.center.z, roundabout.radius)
+	end
+end
+
+return RoadPainter
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="52">
+          <Properties>
+            <string name="Name">RoadSurface</string>
+            <string name="Source"><![CDATA[--!strict
+-- RoadSurface: reine Regeln fuer den buendig in das Terrain gemalten Asphalt.
+-- Keine Roblox-Instanzen, damit die Werte mit `lune run` geprueft werden.
+-- Die Strasse ist die oberste Terrain-Voxelreihe mit Material Asphalt; sie
+-- kann dadurch weder schweben noch im Gras verschwinden.
+
+local RoadSurface = {}
+
+-- Terrain-Voxelraster in Studs.
+RoadSurface.VOXEL = 4
+-- Leichter Innenabstand beim Stempeln, damit keine Nachbarvoxel mitgefaerbt werden.
+RoadSurface.PAINT_INSET = 0.05
+-- Hoehe der Mittellinie ueber der Asphaltoberflaeche.
+RoadSurface.LINE_LIFT = 0.06
+-- Sichtbare Dicke des Brueckendecks.
+RoadSurface.BRIDGE_THICKNESS = 0.4
+-- Abschnittslaenge fuer Mittellinie/Haltelinie (eine Voxelzelle).
+RoadSurface.STEP_LENGTH = 4
+RoadSurface.MAX_STEPS = 400
+
+-- Obere Kante der Terrain-Voxelreihe, in der analytischen Hoehe `terrainY`.
+function RoadSurface.cellTop(terrainY: number): number
+	return math.ceil(terrainY / RoadSurface.VOXEL) * RoadSurface.VOXEL
+end
+
+function RoadSurface.stepsFor(length2D: number): number
+	if length2D < 0.1 then
+		return 1
+	end
+	return math.clamp(math.ceil(length2D / RoadSurface.STEP_LENGTH), 1, RoadSurface.MAX_STEPS)
+end
+
+-- Kantenlaenge des Stempelwuerfels (etwas kleiner als eine Voxel).
+function RoadSurface.paintSize(): number
+	return RoadSurface.VOXEL - RoadSurface.PAINT_INSET * 2
+end
+
+-- Y-Mittelpunkt des Stempels fuer die oberste Voxelreihe.
+function RoadSurface.paintCenterY(terrainY: number): number
+	return RoadSurface.cellTop(terrainY) - RoadSurface.VOXEL / 2
+end
+
+function RoadSurface.validate(): boolean
+	assert(RoadSurface.VOXEL > 0, "VOXEL must be positive")
+	assert(RoadSurface.PAINT_INSET >= 0 and RoadSurface.PAINT_INSET < RoadSurface.VOXEL / 2, "PAINT_INSET invalid")
+	assert(RoadSurface.LINE_LIFT >= 0, "LINE_LIFT must not be negative")
+	assert(RoadSurface.BRIDGE_THICKNESS > 0, "BRIDGE_THICKNESS must be positive")
+	assert(RoadSurface.STEP_LENGTH > 0, "STEP_LENGTH must be positive")
+	return true
+end
+
+assert(RoadSurface.validate(), "RoadSurface failed validation on load")
+
+return RoadSurface
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="53">
+          <Properties>
+            <string name="Name">SpawnBuilder</string>
+            <string name="Source"><![CDATA[--!strict
+-- SpawnBuilder: setzt genau einen Start-Spawnpunkt am Doenerplatz auf den
+-- tatsaechlichen Boden. Ohne SpawnLocation setzt Roblox Charaktere hoch in
+-- der Luft ab; Fahrzeuge wuerden dann ebenfalls in der Luft spawnen.
+-- Keine Preise, keine Gameplay-Logik, keine globalen Variablen.
+
+local function requireSibling(name: string): any
+	local ok, module = pcall(require, "./" .. name)
+	if ok then
+		return module
+	end
+	return require(script.Parent[name])
+end
+
+local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
+
+local SpawnBuilder = {}
+
+SpawnBuilder.SPAWN_X = 0
+SpawnBuilder.SPAWN_Z = 26
+
+function SpawnBuilder.build(parent: Instance): Folder
+	local folder = Instance.new("Folder")
+	folder.Name = "Spawns"
+
+	local x = SpawnBuilder.SPAWN_X
+	local z = SpawnBuilder.SPAWN_Z
+	local groundY = BuildingPlacement.surfaceAt(x, z) or TerrainHeight.heightAt(x, z)
+
+	local pad = Instance.new("SpawnLocation")
+	pad.Name = "StartSpawn"
+	pad.Size = Vector3.new(12, 0.4, 12)
+	pad.CFrame = CFrame.new(x, groundY + 0.2, z)
+	pad.Anchored = true
+	pad.CanCollide = true
+	pad.Neutral = true
+	pad.Duration = 0
+	pad.TopSurface = Enum.SurfaceType.Smooth
+	pad.BottomSurface = Enum.SurfaceType.Smooth
+	pad.Color = Color3.fromRGB(245, 245, 245)
+	pad.Material = Enum.Material.SmoothPlastic
+	pad.Parent = folder
+
+	folder.Parent = parent
+	return folder
+end
+
+return SpawnBuilder
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="54">
           <Properties>
             <string name="Name">TerrainBuilder</string>
-            <string name="Source">--!strict
+            <string name="Source"><![CDATA[--!strict
 -- TerrainBuilder: begrenztes Gras-Terrain entlang TerrainHeight, mit sanften
 -- Randbergen, See- und Bachbetten. Nutzt die Roblox-Terrain-API (keine Parts
 -- als Bodenplatte). Keine braunen Materialien, kein Sand, keine offenen
 -- unendlichen Flächen, keine globalen Variablen.
+-- Strassen werden nicht mehr ausgestanzt: der Asphalt wird in RoadBuilder auf
+-- die tatsaechliche Terrainoberflaeche gelegt.
 
 local function requireSibling(name: string): any
 	local ok, module = pcall(require, "./" .. name)
@@ -8640,14 +9757,14 @@ function TerrainBuilder.build(parent: Instance): Folder
 
 	-- Säulenweise Füllung entlang des Höhenmodells.
 	local x = minX
-	while x &lt; maxX do
+	while x < maxX do
 		local cx = x + CELL_SIZE / 2
 		local z = minZ
-		while z &lt; maxZ do
+		while z < maxZ do
 			local cz = z + CELL_SIZE / 2
 			local h = TerrainHeight.heightAt(cx, cz)
 			local columnHeight = h - BASE_Y
-			if columnHeight &gt; 0.1 then
+			if columnHeight > 0.1 then
 				local center = Vector3.new(cx, BASE_Y + columnHeight / 2, cz)
 				local size = Vector3.new(CELL_SIZE, columnHeight, CELL_SIZE)
 				terrain:FillBlock(CFrame.new(center), size, Enum.Material.Grass)
@@ -8661,10 +9778,11 @@ function TerrainBuilder.build(parent: Instance): Folder
 	return folder
 end
 
-return TerrainBuilder</string>
+return TerrainBuilder
+]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="48">
+        <Item class="ModuleScript" referent="55">
           <Properties>
             <string name="Name">TerrainHeight</string>
             <string name="Source"><![CDATA[--!strict
@@ -8962,7 +10080,7 @@ return TerrainHeight
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="49">
+        <Item class="ModuleScript" referent="56">
           <Properties>
             <string name="Name">TrafficSignBuilder</string>
             <string name="Source">--!strict
@@ -9172,7 +10290,7 @@ end
 return TrafficSignBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="50">
+        <Item class="ModuleScript" referent="57">
           <Properties>
             <string name="Name">TrafficSignPlacer</string>
             <string name="Source"><![CDATA[--!strict
@@ -9452,7 +10570,7 @@ return TrafficSignPlacer
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="51">
+        <Item class="ModuleScript" referent="58">
           <Properties>
             <string name="Name">ValleyWorld</string>
             <string name="Source"><![CDATA[--!strict
@@ -9478,6 +10596,7 @@ local WorldLayout = requireSibling("WorldLayout")
 local TerrainBuilder = requireSibling("TerrainBuilder")
 local WaterBuilder = requireSibling("WaterBuilder")
 local RoadBuilder = requireSibling("RoadBuilder")
+local RoadPainter = requireSibling("RoadPainter")
 local IntersectionBuilder = requireSibling("IntersectionBuilder")
 local BridgeBuilder = requireSibling("BridgeBuilder")
 local TrafficSignPlacer = requireSibling("TrafficSignPlacer")
@@ -9489,6 +10608,7 @@ local VegetationBuilder = requireSibling("VegetationBuilder")
 local GrassFieldBuilder = requireSibling("GrassFieldBuilder")
 local AtmosphereBuilder = requireSibling("AtmosphereBuilder")
 local GarageWorldBuilder = requireSibling("GarageWorldBuilder")
+local SpawnBuilder = requireSibling("SpawnBuilder")
 
 ValleyWorld.MAX_PLAYERS = 15
 
@@ -9555,6 +10675,9 @@ local function buildWorld(root: Instance): ()
 
 	WaterBuilder.build(root)
 
+	-- Asphalt buendig in die oberste Terrainvoxel malen (keine schwebenden Parts).
+	RoadPainter.paint(workspace.Terrain)
+
 	RoadBuilder.build(root)
 	IntersectionBuilder.build(root)
 	BridgeBuilder.build(root)
@@ -9571,6 +10694,9 @@ local function buildWorld(root: Instance): ()
 	PastureBuilder.build(root)
 
 	TrafficSignPlacer.build(root)
+
+	-- Start-Spawn zuletzt: die Bodenhoehe ist dann bereits endgueltig.
+	SpawnBuilder.build(root)
 
 	AtmosphereBuilder.apply()
 end
@@ -9597,7 +10723,7 @@ return ValleyWorld
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="52">
+        <Item class="ModuleScript" referent="59">
           <Properties>
             <string name="Name">VegetationBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -9875,7 +11001,7 @@ return VegetationBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="53">
+        <Item class="ModuleScript" referent="60">
           <Properties>
             <string name="Name">VillageBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -9902,6 +11028,7 @@ end
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
 local BuildingFactory = requireSibling("BuildingFactory")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local VillageBuilder = {}
 
@@ -9955,7 +11082,8 @@ function VillageBuilder.build(parent: Instance): Folder
 			local model: Model = BuildingFactory.create(definition)
 			model:SetAttribute("SlotId", slot.id)
 			model.Parent = folder
-			local groundY: number = TerrainHeight.heightAt(slot.position.x, slot.position.z)
+			local groundY: number = BuildingPlacement.surfaceAt(slot.position.x, slot.position.z)
+				or TerrainHeight.heightAt(slot.position.x, slot.position.z)
 			local ground = Vector3.new(slot.position.x, groundY, slot.position.z)
 			local rigid = CFrame.new(ground) * CFrame.Angles(0, math.rad(slot.yaw), 0)
 			local pivot: CFrame = model:GetPivot()
@@ -9971,7 +11099,7 @@ return VillageBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="54">
+        <Item class="ModuleScript" referent="61">
           <Properties>
             <string name="Name">WaterBuilder</string>
             <string name="Source">--!strict
@@ -10092,7 +11220,7 @@ end
 return WaterBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="55">
+        <Item class="ModuleScript" referent="62">
           <Properties>
             <string name="Name">WorldLayout</string>
             <string name="Source"><![CDATA[--!strict
@@ -10201,8 +11329,8 @@ local SLOTS_PER_VILLAGE = 10
 local SLOT_RADIUS = 100
 local SLOT_RADIUS_JITTER = 8
 local SLOT_ANGLE_JITTER = 4
-local SLOT_FOOTPRINT: Footprint = { x = 20, z = 16 }
-local DELIVERY_OFFSET = 14
+local SLOT_FOOTPRINT: Footprint = { x = 42, z = 32 }
+local DELIVERY_OFFSET = 20
 
 local GARAGE_COUNT = 15
 local GARAGE_RING_RADIUS = 200
@@ -10303,7 +11431,7 @@ WorldLayout.CHURCH = {
 	villageId = VILLAGE_PLAN[1].id,
 	position = copyPosition(VILLAGE_PLAN[1].center),
 	yaw = yawTowards(VILLAGE_PLAN[1].center, WorldLayout.DONER.position),
-	footprint = { x = 22, z = 30 },
+	footprint = { x = 26, z = 40 },
 }
 
 -- 15 Garagen auf einem gemeinsamen Ring: gleicher Abstand zum Doenerplatz,
@@ -10439,7 +11567,7 @@ return WorldLayout
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="56">
+        <Item class="ModuleScript" referent="63">
           <Properties>
             <string name="Name">WorldZones</string>
             <string name="Source"><![CDATA[--!strict
@@ -10543,9 +11671,9 @@ WorldZones.MAIN_ROAD_WIDTH = 16
 WorldZones.STOP_ROAD_WIDTH = 12
 -- Aussenradius eines Kreisels (Studs).
 WorldZones.ROUNDABOUT_RADIUS = 16
--- Angenommener Ankerradius einer Garage (Studs); groessere Garagen sind
--- unzulaessig, sonst kollidieren sie mit Ringstrasse und Kreiseln.
-WorldZones.GARAGE_RADIUS = 12
+-- Angenommener Ankerradius einer Garage (Studs). Beruecksichtigt den
+-- Vergroesserungsfaktor 1.4 (radiale Tiefe 20*1.4/2 = 14) mit Reserve.
+WorldZones.GARAGE_RADIUS = 16
 -- Mindestabstand zwischen Zonen und Garagen, Gebaeuden bzw. Doerfern.
 WorldZones.MIN_CLEARANCE = 8
 
@@ -11006,11 +12134,11 @@ return WorldZones
 ]]></string>
           </Properties>
         </Item>
-        <Item class="Folder" referent="57">
+        <Item class="Folder" referent="64">
           <Properties>
             <string name="Name">data</string>
           </Properties>
-          <Item class="ModuleScript" referent="58">
+          <Item class="ModuleScript" referent="65">
             <Properties>
               <string name="Name">BuildingCatalog</string>
               <string name="Source">--!strict
@@ -11259,11 +12387,11 @@ return BuildingCatalog</string>
         </Item>
       </Item>
     </Item>
-    <Item class="Folder" referent="59">
+    <Item class="Folder" referent="66">
       <Properties>
         <string name="Name">shared</string>
       </Properties>
-      <Item class="ModuleScript" referent="60">
+      <Item class="ModuleScript" referent="67">
         <Properties>
           <string name="Name">GameConfig</string>
           <string name="Source"><![CDATA[--!strict
@@ -11286,11 +12414,11 @@ return table.freeze(GameConfig)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="61">
+      <Item class="Folder" referent="68">
         <Properties>
           <string name="Name">data</string>
         </Properties>
-        <Item class="ModuleScript" referent="62">
+        <Item class="ModuleScript" referent="69">
           <Properties>
             <string name="Name">PartsCatalog</string>
             <string name="Source"><![CDATA[--!strict
@@ -11738,7 +12866,7 @@ return PartsCatalog
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="63">
+        <Item class="ModuleScript" referent="70">
           <Properties>
             <string name="Name">PlayerDataSchema</string>
             <string name="Source"><![CDATA[--!strict
@@ -11913,7 +13041,7 @@ return PlayerDataSchema
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="64">
+        <Item class="ModuleScript" referent="71">
           <Properties>
             <string name="Name">VehicleCatalog</string>
             <string name="Source"><![CDATA[--!strict
@@ -12167,11 +13295,11 @@ return VehicleCatalog
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="65">
+      <Item class="Folder" referent="72">
         <Properties>
           <string name="Name">net</string>
         </Properties>
-        <Item class="ModuleScript" referent="66">
+        <Item class="ModuleScript" referent="73">
           <Properties>
             <string name="Name">RateLimiter</string>
             <string name="Source"><![CDATA[-- RateLimiter: pro Spieler und Aktion begrenzte Anfragefenster
@@ -12370,7 +13498,7 @@ return RateLimiter
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="67">
+        <Item class="ModuleScript" referent="74">
           <Properties>
             <string name="Name">RemoteProtocol</string>
             <string name="Source"><![CDATA[-- RemoteProtocol: versionierte Remote-Namen und Payload-Schemas.
@@ -12544,11 +13672,11 @@ return RemoteProtocol
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="68">
+      <Item class="Folder" referent="75">
         <Properties>
           <string name="Name">vehicle</string>
         </Properties>
-        <Item class="ModuleScript" referent="69">
+        <Item class="ModuleScript" referent="76">
           <Properties>
             <string name="Name">StatsCalculator</string>
             <string name="Source"><![CDATA[--!strict
@@ -12894,15 +14022,15 @@ return StatsCalculator
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="70">
+  <Item class="StarterPlayer" referent="77">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="71">
+    <Item class="StarterPlayerScripts" referent="78">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="LocalScript" referent="72">
+      <Item class="LocalScript" referent="79">
         <Properties>
           <string name="Name">bootstrap</string>
           <string name="Source"><![CDATA[--!strict
@@ -12919,7 +14047,7 @@ local RemoteProtocol = require(Shared:WaitForChild("net"):WaitForChild("RemotePr
 
 local ClientRoot = script.Parent
 local BicycleController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("BicycleController"))
-local MopedController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("MopedController"))
+local MopedMountController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("MopedMountController"))
 local GrassController = require(ClientRoot:WaitForChild("controllers"):WaitForChild("GrassController"))
 local ShopTerminal = require(ClientRoot:WaitForChild("ui"):WaitForChild("ShopTerminal"))
 local DeliveryPrompt = require(ClientRoot:WaitForChild("ui"):WaitForChild("DeliveryPrompt"))
@@ -12929,6 +14057,7 @@ local bicycleController = BicycleController.new()
 local grassController = GrassController.new()
 
 local deliveryPrompt: any = nil
+local mopedMountController: any = nil
 
 local connections: { RBXScriptConnection } = {}
 
@@ -12982,19 +14111,17 @@ local function requestViaRouter(netFolder: Folder, action: string, payload: any)
 	return nil
 end
 
--- 2-4. Controller mit serverseitig gelieferten Fahrzeugwerten starten.
+-- 2-4. Controller starten. Mofa-Fahrwerte kommen aus den serverseitig
+-- gesetzten Attributen des gespawnten Modells.
 local function setupControllers(netFolder: Folder): ()
-	-- Fahrzeugauswahl und Werte kommen ausschliesslich vom Server.
-	local vehicleSnapshot = requestViaRouter(netFolder, "VehicleSelect", { action = "getActive" })
-	callOptional(MopedController, "init", {
-		remotes = netFolder,
-		vehicle = vehicleSnapshot,
-		onFuelEmpty = function()
+	mopedMountController = MopedMountController.new({
+		bicycle = bicycleController,
+		onOutOfFuel = function()
 			requestViaRouter(netFolder, "FuelRefill", { action = "requestRescue" })
 		end,
 	})
 	bicycleController:Start()
-	callOptional(MopedController, "start")
+	mopedMountController:Start()
 	grassController:Start()
 end
 
@@ -13041,7 +14168,9 @@ end
 local function onCharacterAdded(character: Model): ()
 	-- Spawn: Controller an neuem Charakter einhängen, UI-Zustand zurücksetzen.
 	bicycleController:OnCharacterAdded(character)
-	callOptional(MopedController, "onCharacterAdded", character)
+	if mopedMountController ~= nil then
+		mopedMountController:OnCharacterAdded(character)
+	end
 	callOptional(ShopTerminal, "onCharacterAdded", character)
 	if deliveryPrompt ~= nil then
 		callOptional(deliveryPrompt, "onCharacterAdded", character)
@@ -13069,7 +14198,9 @@ local function shutdown(): ()
 	if deliveryPrompt ~= nil then
 		callOptional(deliveryPrompt, "destroy")
 	end
-	callOptional(MopedController, "stop")
+	if mopedMountController ~= nil then
+		mopedMountController:Stop()
+	end
 	grassController:Stop()
 	bicycleController:Stop()
 end
@@ -13102,11 +14233,11 @@ init()
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="73">
+      <Item class="Folder" referent="80">
         <Properties>
           <string name="Name">controllers</string>
         </Properties>
-        <Item class="ModuleScript" referent="74">
+        <Item class="ModuleScript" referent="81">
           <Properties>
             <string name="Name">BicycleController</string>
             <string name="Source"><![CDATA[--!strict
@@ -13117,6 +14248,8 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
+
+local VehiclePhysics = require(script.Parent.VehiclePhysics)
 
 local BicycleController = {}
 BicycleController.__index = BicycleController
@@ -13131,6 +14264,8 @@ export type BicycleController = typeof(setmetatable(
 		_steer: number,
 		_brake: boolean,
 		_mountDebounceUntil: number,
+		_physics: any?,
+		_physicsError: boolean,
 		_inputBegan: RBXScriptConnection?,
 		_inputEnded: RBXScriptConnection?,
 		_stepped: RBXScriptConnection?,
@@ -13142,12 +14277,12 @@ export type BicycleController = typeof(setmetatable(
 -- Fahrwerte (studs/s, Arcade-Abstimmung).
 local MAX_SPEED = 18
 local MAX_REVERSE_SPEED = 4
-local ACCELERATION = 12
-local BRAKE_DECELERATION = 22
-local COAST_FRICTION = 6
 local TURN_RATE = 1.9
 local MOUNT_DISTANCE = 10
 local MOUNT_COOLDOWN = 0.5
+-- Arcade-Physik: kraeftig genug, um Steigungen zu erklimmen.
+local PEDAL_ACCELERATION = 130
+local PEDAL_BRAKE = 12
 
 -- Auf-/Absteigen per PC-Taste. Es wird nur das eigene Startfahrrad gewaehlt.
 local BICYCLE_TAG = "ToeffliBicycle"
@@ -13226,6 +14361,8 @@ function BicycleController.new(): BicycleController
 		_steer = 0,
 		_brake = false,
 		_mountDebounceUntil = 0,
+		_physics = nil,
+		_physicsError = false,
 		_inputBegan = nil,
 		_inputEnded = nil,
 		_stepped = nil,
@@ -13244,6 +14381,13 @@ end
 
 function BicycleController.GetBike(self: BicycleController): Model?
 	return self._bike
+end
+
+-- Kurz nach Auf-/Absteigen ist E fuer andere Fahrzeuge gesperrt, damit ein
+-- einzelner Tastendruck nicht direkt vom Fahrrad auf ein danebenstehendes
+-- Mofa wechselt.
+function BicycleController.IsMountCoolingDown(self: BicycleController): boolean
+	return os.clock() < self._mountDebounceUntil
 end
 
 -- Stabile Aufstiegslogik: Naehe, freier Sitz, lebender Humanoid, Entprellung.
@@ -13293,8 +14437,48 @@ function BicycleController.Mount(self: BicycleController, bike: Model): boolean
 	self._mounted = true
 	self._speed = 0
 	self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
+	-- Der Sitz ist fuer Auto-Aufsitzen deaktiviert. Fuer den expliziten
+	-- E-Mount wird er freigegeben und erst nach dem Absteigen wieder gesperrt
+	-- (waehrend des Sitzens darf `Disabled` nicht umgeschaltet werden).
+	seat.Disabled = false
 	seat:Sit(humanoid)
+	self:_ensurePhysics()
 	return true
+end
+
+-- Erzeugt die Physik-Huelle nur einmal und meldet Fehler sichtbar im Output.
+function BicycleController._ensurePhysics(self: BicycleController): ()
+	if self._physics ~= nil then
+		return
+	end
+	local bike = self._bike
+	if bike == nil then
+		return
+	end
+	local ok, result = pcall(VehiclePhysics.new, bike, {
+		maxSpeed = MAX_SPEED,
+		reverseSpeed = MAX_REVERSE_SPEED,
+		acceleration = PEDAL_ACCELERATION,
+		brake = PEDAL_BRAKE,
+		coast = 2.4,
+		turnRate = TURN_RATE,
+		grip = 8,
+	})
+	if ok then
+		self._physics = result
+		return
+	end
+	if not self._physicsError then
+		self._physicsError = true
+		warn("[ToeffliTal][Physik] Fahrrad: " .. tostring(result))
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Töffli Tal",
+				Text = "Fahrrad-Physikfehler – bitte Output melden.",
+				Duration = 8,
+			})
+		end)
+	end
 end
 
 function BicycleController.Dismount(self: BicycleController): ()
@@ -13309,12 +14493,12 @@ function BicycleController.Dismount(self: BicycleController): ()
 	self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
 
 	local seat = self._seat
-	if seat ~= nil then
-		seat.Disabled = true
-		seat.Disabled = false
-	end
 	self._bike = nil
 	self._seat = nil
+	if self._physics ~= nil then
+		self._physics:destroy()
+		self._physics = nil
+	end
 
 	local player = Players.LocalPlayer
 	local character: Model? = nil
@@ -13324,8 +14508,12 @@ function BicycleController.Dismount(self: BicycleController): ()
 	if character ~= nil then
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		if humanoid ~= nil and humanoid.SeatPart ~= nil then
-			humanoid.Jump = true
+			humanoid.Sit = false
 		end
+	end
+	-- Erst nach dem Aufstehen wieder fuer Auto-Aufsitzen sperren.
+	if seat ~= nil then
+		seat.Disabled = true
 	end
 end
 
@@ -13342,6 +14530,12 @@ function BicycleController.ToggleMount(self: BicycleController): boolean
 	if player == nil then
 		return false
 	end
+	-- Ein fremdes Fahrzeug (z. B. Mofa) kontrolliert den Sitz. E darf das
+	-- Fahrrad dann nicht gleichzeitig uebernehmen.
+	local humanoid = getCharacterHumanoid(player)
+	if humanoid ~= nil and humanoid.SeatPart ~= nil then
+		return false
+	end
 	local bike = findNearestOwnedBicycle(player, MOUNT_DISTANCE)
 	if bike == nil then
 		return false
@@ -13351,6 +14545,7 @@ end
 
 -- Gemeinsamer Ruecksetzpfad ohne Sprung (Respawn, externes Absteigen).
 function BicycleController._resetMountState(self: BicycleController, cooldown: boolean): ()
+	local seat = self._seat
 	self._mounted = false
 	self._speed = 0
 	self._throttle = 0
@@ -13358,6 +14553,13 @@ function BicycleController._resetMountState(self: BicycleController, cooldown: b
 	self._brake = false
 	self._bike = nil
 	self._seat = nil
+	if self._physics ~= nil then
+		self._physics:destroy()
+		self._physics = nil
+	end
+	if seat ~= nil then
+		seat.Disabled = true
+	end
 	if cooldown then
 		self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
 	end
@@ -13451,10 +14653,13 @@ function BicycleController._step(self: BicycleController, dt: number): ()
 	end
 
 	-- Sitzbezug pruefen: externes Absteigen (z. B. Sprung) sauber uebernehmen.
+	-- Direkt nach dem Aufsteigen kurz Nachsicht, bis Roblox den Sitz zuweist.
 	local player = Players.LocalPlayer
 	local humanoid = if player ~= nil then getCharacterHumanoid(player) else nil
 	if humanoid == nil or humanoid.SeatPart ~= self._seat then
-		self:_resetMountState(true)
+		if os.clock() >= self._mountDebounceUntil then
+			self:_resetMountState(true)
+		end
 		return
 	end
 	-- Space ist Bremse, nicht Sprung: Absprung waehrend der Fahrt unterdruecken.
@@ -13467,51 +14672,15 @@ function BicycleController._step(self: BicycleController, dt: number): ()
 	self._steer = steer
 	self._brake = brake
 
-	-- Beschleunigung / Bremsen / Ausrollen. Fahrrad: reine Tretphysik.
-	if brake then
-		if self._speed > 0 then
-			self._speed = math.max(0, self._speed - BRAKE_DECELERATION * dt)
-		elseif self._speed < 0 then
-			self._speed = math.min(0, self._speed + BRAKE_DECELERATION * dt)
-		end
-	elseif throttle > 0 then
-		self._speed = math.min(MAX_SPEED, self._speed + ACCELERATION * throttle * dt)
-	elseif throttle < 0 then
-		self._speed = math.max(-MAX_REVERSE_SPEED, self._speed + ACCELERATION * throttle * dt)
-	else
-		-- Ausrollen: Reibung zieht Geschwindigkeit gegen null.
-		if self._speed > 0 then
-			self._speed = math.max(0, self._speed - COAST_FRICTION * dt)
-		elseif self._speed < 0 then
-			self._speed = math.min(0, self._speed + COAST_FRICTION * dt)
-		end
+	self:_ensurePhysics()
+	local physics = self._physics
+	if physics == nil then
+		self:Dismount()
+		return
 	end
-
-	-- Lenkung und Vortrieb wirken auf das ganze Model, nicht nur auf `Drive`.
-	-- Anchored Parts folgen keinen Welds; erst PivotTo bewegt Sitz, Raeder und
-	-- den aufgesessenen Charakter gemeinsam.
-	local pivot = bike:GetPivot()
-	local rotated = pivot
-	local speedFactor = math.clamp(math.abs(self._speed) / MAX_SPEED, 0, 1)
-	if speedFactor > 0.01 and steer ~= 0 then
-		local direction = if self._speed >= 0 then 1 else -1
-		local yaw = -steer * TURN_RATE * (0.35 + 0.65 * speedFactor) * direction * dt
-		rotated = pivot * CFrame.Angles(0, yaw, 0)
-	end
-
-	local translation = Vector3.zero
-	if math.abs(self._speed) > 0.01 then
-		local forward = rotated.LookVector
-		-- Vertikale Komponente ignorieren, damit das Rad nicht abhebt.
-		local flat = Vector3.new(forward.X, 0, forward.Z)
-		if flat.Magnitude > 0.001 then
-			translation = flat.Unit * self._speed * dt
-		end
-	end
-
-	if rotated ~= pivot or translation.Magnitude > 0 then
-		bike:PivotTo(rotated + translation)
-	end
+	-- Echte Physik: Antrieb als Kraft, Ausrichtung folgt der Steigung.
+	physics:update(dt, { throttle = throttle, steer = steer, brake = brake })
+	self._speed = physics:getSpeed()
 end
 
 function BicycleController.Start(self: BicycleController): ()
@@ -13569,7 +14738,7 @@ return BicycleController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="75">
+        <Item class="ModuleScript" referent="82">
           <Properties>
             <string name="Name">GrassController</string>
             <string name="Source"><![CDATA[--!strict
@@ -13917,7 +15086,7 @@ return GrassController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="76">
+        <Item class="ModuleScript" referent="83">
           <Properties>
             <string name="Name">MopedController</string>
             <string name="Source"><![CDATA[--!strict
@@ -13930,6 +15099,8 @@ return GrassController
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+
+local VehiclePhysics = require(script.Parent.VehiclePhysics)
 
 export type VehicleStats = {
 	modelId: string,
@@ -13971,6 +15142,11 @@ local function clampNumber(value: number, minValue: number, maxValue: number): n
 		return value
 	end
 end
+
+-- Arcade-Physik: kraeftig genug, um Steigungen zu erklimmen.
+local ENGINE_ACCELERATION = 180
+local ENGINE_BRAKE = 14
+local ENGINE_GRIP = 9
 
 local function sanitizeStats(raw: VehicleStats?): VehicleStats
 	if raw == nil then
@@ -14019,6 +15195,10 @@ export type MopedController = typeof(setmetatable(
 		_speed: number,
 		_seat: VehicleSeat?,
 		_vehicleRoot: BasePart?,
+		_vehicleModel: Model?,
+		_physics: any?,
+		_physicsError: boolean,
+		_mountedAt: number,
 		_connections: { RBXScriptConnection },
 		_onEngineChanged: ((boolean) -> ())?,
 		_onOutOfFuel: (() -> ())?,
@@ -14042,6 +15222,10 @@ function MopedController.new(initialStats: VehicleStats?): MopedController
 		_speed = 0,
 		_seat = nil,
 		_vehicleRoot = nil,
+		_vehicleModel = nil,
+		_physics = nil,
+		_physicsError = false,
+		_mountedAt = 0,
 		_connections = {},
 		_onEngineChanged = nil,
 		_onOutOfFuel = nil,
@@ -14172,7 +15356,42 @@ function MopedController.CanMount(self: MopedController, seat: VehicleSeat?, max
 	return distance <= limit
 end
 
-function MopedController.Mount(self: MopedController, seat: VehicleSeat, vehicleRoot: BasePart?)
+-- Baut die Physik-Huelle fuer das aktuell gebundene Modell (idempotent).
+function MopedController._ensurePhysics(self: MopedController): ()
+	if self._physics ~= nil then
+		return
+	end
+	local model = self._vehicleModel
+	if model == nil then
+		return
+	end
+	local ok, result = pcall(VehiclePhysics.new, model, {
+		maxSpeed = self._stats.topSpeed,
+		reverseSpeed = self._stats.reverseSpeed or 4,
+		acceleration = ENGINE_ACCELERATION,
+		brake = ENGINE_BRAKE,
+		coast = 3,
+		turnRate = self._stats.turnRate,
+		grip = ENGINE_GRIP,
+	})
+	if ok then
+		self._physics = result
+		return
+	end
+	if not self._physicsError then
+		self._physicsError = true
+		warn("[ToeffliTal][Physik] Mofa: " .. tostring(result))
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Töffli Tal",
+				Text = "Mofa-Physikfehler – bitte Output melden.",
+				Duration = 8,
+			})
+		end)
+	end
+end
+
+function MopedController.Mount(self: MopedController, seat: VehicleSeat, vehicleRoot: BasePart?, vehicleModel: Model?)
 	if self._destroyed then
 		return false
 	end
@@ -14182,25 +15401,42 @@ function MopedController.Mount(self: MopedController, seat: VehicleSeat, vehicle
 	self:Dismount()
 	self._seat = seat
 	self._vehicleRoot = vehicleRoot
+	self._vehicleModel = vehicleModel
+	self._mountedAt = os.clock()
+	self:_ensurePhysics()
 	self:_applyStatsToSeat()
 	self:_bindInput()
 	self:_bindPhysics()
 	return true
 end
 
+function MopedController.GetVehicleModel(self: MopedController): Model?
+	return self._vehicleModel
+end
+
 function MopedController.Dismount(self: MopedController)
+	local seat = self._seat
 	local player = Players.LocalPlayer
 	if player ~= nil then
 		local character = player.Character
 		if character ~= nil then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			if humanoid ~= nil and humanoid.SeatPart == self._seat then
+			if humanoid ~= nil and humanoid.SeatPart == seat then
 				humanoid.Sit = false
 			end
 		end
 	end
+	-- Erst nach dem Aufstehen wieder fuer Auto-Aufsitzen sperren.
+	if seat ~= nil then
+		seat.Disabled = true
+	end
+	if self._physics ~= nil then
+		self._physics:destroy()
+		self._physics = nil
+	end
 	self._seat = nil
 	self._vehicleRoot = nil
+	self._vehicleModel = nil
 	self._speed = 0
 	self._input.throttle = 0
 	self._input.brake = 0
@@ -14354,14 +15590,42 @@ function MopedController._bindInput(self: MopedController)
 	table.insert(self._connections, ended)
 end
 
+-- Fahrt laeuft vollstaendig ueber VehiclePhysics (VectorForce + AlignOrientation).
+
 function MopedController._bindPhysics(self: MopedController)
 	local heartbeat = RunService.Heartbeat:Connect(function(dt: number)
 		if self._seat == nil then
 			return
 		end
+		local player = Players.LocalPlayer
+		local character = if player ~= nil then player.Character else nil
+		local humanoid = if character ~= nil then character:FindFirstChildOfClass("Humanoid") else nil
+		if humanoid == nil or humanoid.SeatPart ~= self._seat then
+			-- Kurz nach dem Aufsteigen Nachsicht, bis Roblox den Sitz zuweist.
+			if os.clock() - self._mountedAt < 0.75 then
+				return
+			end
+			self:Dismount()
+			return
+		end
+		-- Space ist Bremse, nicht Sprung.
+		if humanoid.Jump then
+			humanoid.Jump = false
+		end
+
 		local clampedDt = clampNumber(dt, 0, 1 / 20)
 		self:_consumeFuel(clampedDt)
-		self:_stepSpeed(clampedDt)
+		self:_ensurePhysics()
+		local physics = self._physics
+		if physics ~= nil then
+			local throttle = if self:CanDrive() then self._input.throttle else 0
+			physics:update(clampedDt, {
+				throttle = throttle,
+				steer = self._input.steer,
+				brake = self._input.brake > 0 or self._input.handbrake,
+			})
+			self._speed = physics:getSpeed()
+		end
 		self:_applyInputToSeat()
 	end)
 	table.insert(self._connections, heartbeat)
@@ -14371,12 +15635,683 @@ return MopedController
 ]]></string>
           </Properties>
         </Item>
+        <Item class="ModuleScript" referent="84">
+          <Properties>
+            <string name="Name">MopedMountController</string>
+            <string name="Source"><![CDATA[--!strict
+-- MopedMountController: findet das eigene serverseitig gespawnte Mofa,
+-- steuert Auf-/Absteigen per E und uebergibt Fahrwerte an den MopedController.
+-- Es werden nur Modelle mit Tag `ToeffliMoped` und passendem Besitzer bewegt.
+-- Preise, Besitz und Spawnposition bleiben serverseitig.
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
+
+local MopedController = require(script.Parent.MopedController)
+
+local MopedMountController = {}
+MopedMountController.__index = MopedMountController
+
+local TAG_NAME = "ToeffliMoped"
+local MOUNT_KEY = Enum.KeyCode.E
+local MOUNT_DISTANCE = 10
+local MOUNT_COOLDOWN = 0.5
+
+export type Options = {
+	onOutOfFuel: (() -> ())?,
+	bicycle: any?,
+}
+
+export type MopedMountController = typeof(setmetatable(
+	{} :: {
+		_controller: any,
+		_model: Model?,
+		_seat: VehicleSeat?,
+		_mountDebounceUntil: number,
+		_inputBegan: RBXScriptConnection?,
+		_stepped: RBXScriptConnection?,
+		_destroyed: boolean,
+		_onOutOfFuel: (() -> ())?,
+		_bicycle: any?,
+	},
+	MopedMountController
+))
+
+local function getCharacterRoot(player: Player): BasePart?
+	local character = player.Character
+	if character == nil then
+		return nil
+	end
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if root ~= nil and root:IsA("BasePart") then
+		return root
+	end
+	return nil
+end
+
+local function getHumanoid(player: Player): Humanoid?
+	local character = player.Character
+	if character == nil then
+		return nil
+	end
+	return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function findSeat(model: Model): VehicleSeat?
+	local seat = model:FindFirstChild("Seat", true)
+	if seat ~= nil and seat:IsA("VehicleSeat") then
+		return seat
+	end
+	return model:FindFirstChildWhichIsA("VehicleSeat", true)
+end
+
+local function findDrive(model: Model): BasePart?
+	local primary = model.PrimaryPart
+	if primary ~= nil then
+		return primary
+	end
+	local drive = model:FindFirstChild("Drive", true)
+	if drive ~= nil and drive:IsA("BasePart") then
+		return drive
+	end
+	return model:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function isOwnedBy(model: Model, player: Player): boolean
+	local ownerPlayer = model:GetAttribute("OwnerPlayerUserId")
+	if typeof(ownerPlayer) == "number" then
+		return ownerPlayer == player.UserId
+	end
+	return model:GetAttribute("OwnerUserId") == player.UserId
+end
+
+local function findNearestOwnedMoped(player: Player, maxDistance: number): Model?
+	local root = getCharacterRoot(player)
+	if root == nil then
+		return nil
+	end
+	local nearest: Model? = nil
+	local nearestDistance = maxDistance
+	for _, instance in CollectionService:GetTagged(TAG_NAME) do
+		if instance:IsA("Model") and instance:IsDescendantOf(workspace) then
+			local moped = instance :: Model
+			if isOwnedBy(moped, player) then
+				local drive = findDrive(moped)
+				if drive ~= nil then
+					local distance = (drive.Position - root.Position).Magnitude
+					if distance <= nearestDistance then
+						nearest = moped
+						nearestDistance = distance
+					end
+				end
+			end
+		end
+	end
+	return nearest
+end
+
+local function attributeNumber(model: Model, name: string, fallback: number): number
+	local value = model:GetAttribute(name)
+	if typeof(value) == "number" then
+		return value
+	end
+	return fallback
+end
+
+-- Fahrwerte stammen aus den serverseitig gesetzten Attributen des Modells.
+-- Die Umrechnung ist reine Darstellung; keine Preise oder Besitzentscheidung.
+local function buildStats(model: Model): any
+	local vehicleId = model:GetAttribute("VehicleId")
+	local modelId = if typeof(vehicleId) == "string" then vehicleId else "moped"
+	local topSpeedKmh = attributeNumber(model, "TopSpeedKmh", 45)
+	local acceleration = attributeNumber(model, "Acceleration", 6.5)
+	local braking = attributeNumber(model, "Braking", 7)
+	local handling = attributeNumber(model, "Handling", 7.5)
+	local fuelRate = attributeNumber(model, "FuelConsumptionPerSecond", 0.005)
+	return {
+		modelId = modelId,
+		acceleration = acceleration * 1.6,
+		topSpeed = topSpeedKmh * 0.72,
+		brakeForce = braking * 3,
+		turnRate = handling * 0.25,
+		reverseSpeed = 4,
+		dragCoefficient = 0.28,
+		rollingResistance = 1.6,
+		fuelConsumptionPerSecond = fuelRate,
+	}
+end
+
+function MopedMountController.new(options: Options?): MopedMountController
+	local self = setmetatable({
+		_controller = MopedController.new(),
+		_model = nil,
+		_seat = nil,
+		_mountDebounceUntil = 0,
+		_inputBegan = nil,
+		_stepped = nil,
+		_destroyed = false,
+		_onOutOfFuel = if options ~= nil then options.onOutOfFuel else nil,
+		_bicycle = if options ~= nil then options.bicycle else nil,
+	}, MopedMountController)
+	if self._onOutOfFuel ~= nil then
+		self._controller:OnOutOfFuel(self._onOutOfFuel)
+	end
+	return self
+end
+
+function MopedMountController.IsMounted(self: MopedMountController): boolean
+	return self._model ~= nil
+end
+
+function MopedMountController.GetSpeed(self: MopedMountController): number
+	return self._controller:GetSpeed()
+end
+
+function MopedMountController.Mount(self: MopedMountController, model: Model): boolean
+	local player = Players.LocalPlayer
+	if player == nil or self._destroyed then
+		return false
+	end
+	if self._model ~= nil then
+		return false
+	end
+	if os.clock() < self._mountDebounceUntil then
+		return false
+	end
+	local humanoid = getHumanoid(player)
+	if humanoid == nil or humanoid.Health <= 0 then
+		return false
+	end
+	-- Kein Doppel-Mount, wenn bereits ein Fahrrad oder Mofa kontrolliert.
+	if humanoid.SeatPart ~= nil then
+		return false
+	end
+	local root = getCharacterRoot(player)
+	local drive = findDrive(model)
+	local seat = findSeat(model)
+	if root == nil or drive == nil or seat == nil then
+		return false
+	end
+	if (drive.Position - root.Position).Magnitude > MOUNT_DISTANCE then
+		return false
+	end
+	if seat.Occupant ~= nil then
+		return false
+	end
+
+	self._controller:SetStats(buildStats(model))
+	self._controller:SetFuelLevel(1)
+	-- Sitz ist fuer Auto-Aufsitzen deaktiviert. Fuer den expliziten E-Mount
+	-- freigeben und erst nach dem Absteigen wieder sperren (waehrend des
+	-- Sitzens darf `Disabled` nicht umgeschaltet werden).
+	seat.Disabled = false
+	seat:Sit(humanoid)
+	if not self._controller:Mount(seat, drive, model) then
+		return false
+	end
+	self._controller:StartEngine()
+	self._model = model
+	self._seat = seat
+	self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
+	return true
+end
+
+function MopedMountController.Dismount(self: MopedMountController): ()
+	if self._model == nil and self._seat == nil then
+		return
+	end
+	self._controller:Dismount()
+	self._model = nil
+	self._seat = nil
+	self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
+end
+
+function MopedMountController.ToggleMount(self: MopedMountController): boolean
+	if self._model ~= nil then
+		self:Dismount()
+		return false
+	end
+	if os.clock() < self._mountDebounceUntil then
+		return false
+	end
+	local player = Players.LocalPlayer
+	if player == nil then
+		return false
+	end
+	local humanoid = getHumanoid(player)
+	if humanoid ~= nil and humanoid.SeatPart ~= nil then
+		return false
+	end
+	-- Der Fahrrad-Controller laeuft zuerst. Nach dessen Absteigen darf
+	-- derselbe E-Druck nicht sofort das danebenstehende Mofa uebernehmen.
+	if self._bicycle ~= nil and self._bicycle:IsMountCoolingDown() then
+		return false
+	end
+	local moped = findNearestOwnedMoped(player, MOUNT_DISTANCE)
+	if moped == nil then
+		return false
+	end
+	return self:Mount(moped)
+end
+
+-- Roblox setzt Charaktere beim Beruehren automatisch auf Sitze. Uebernimmt
+-- dieser Sitz zum eigenen getaggten Mofa, gilt das als aufgestiegen.
+function MopedMountController._adoptAutoSeat(self: MopedMountController): ()
+	-- Externes Absteigen (Sprung, Sitz zerstört) sauber übernehmen.
+	if self._model ~= nil and not self._controller:IsRiding() then
+		local seat = self._seat
+		if seat ~= nil then
+			seat.Disabled = true
+		end
+		self._model = nil
+		self._seat = nil
+	end
+	if self._model ~= nil then
+		return
+	end
+	local player = Players.LocalPlayer
+	if player == nil then
+		return
+	end
+	local humanoid = getHumanoid(player)
+	if humanoid == nil then
+		return
+	end
+	local seat = humanoid.SeatPart
+	if seat == nil or not seat:IsA("VehicleSeat") then
+		return
+	end
+	local vehicleSeat = seat :: VehicleSeat
+	local model = vehicleSeat:FindFirstAncestorOfClass("Model")
+	if model == nil then
+		return
+	end
+	if not isOwnedBy(model, player) or not CollectionService:HasTag(model, TAG_NAME) then
+		return
+	end
+	local drive = findDrive(model)
+	if drive == nil then
+		return
+	end
+
+	self._controller:SetStats(buildStats(model))
+	self._controller:SetFuelLevel(1)
+	if not self._controller:Mount(vehicleSeat, drive, model) then
+		return
+	end
+	self._controller:StartEngine()
+	self._model = model
+	self._seat = vehicleSeat
+end
+
+function MopedMountController.OnCharacterAdded(self: MopedMountController, _character: Model?): ()
+	self:Dismount()
+end
+
+function MopedMountController.Start(self: MopedMountController): ()
+	if self._inputBegan ~= nil or self._destroyed then
+		return
+	end
+
+	self._inputBegan = UserInputService.InputBegan:Connect(function(input: InputObject, processed: boolean)
+		if processed then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then
+			return
+		end
+		if input.KeyCode == MOUNT_KEY then
+			self:ToggleMount()
+		end
+	end)
+
+	self._stepped = RunService.Heartbeat:Connect(function()
+		self:_adoptAutoSeat()
+	end)
+end
+
+function MopedMountController.Stop(self: MopedMountController): ()
+	if self._destroyed then
+		return
+	end
+	self._destroyed = true
+	if self._inputBegan ~= nil then
+		self._inputBegan:Disconnect()
+		self._inputBegan = nil
+	end
+	if self._stepped ~= nil then
+		self._stepped:Disconnect()
+		self._stepped = nil
+	end
+	self:Dismount()
+	self._controller:Destroy()
+end
+
+return MopedMountController
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="85">
+          <Properties>
+            <string name="Name">VehicleMotion</string>
+            <string name="Source"><![CDATA[--!strict
+-- VehicleMotion: reine Rechenregeln fuer die clientseitige Arcade-Fahrt.
+-- Keine Roblox-Instanzen, keine Raycasts, damit die Regeln mit `lune run`
+-- geprueft werden koennen. Die Controller liefern nur die Messwerte.
+-- Keine Preise, kein Besitz, keine Serverentscheidung.
+
+export type GroundStep = {
+	y: number,
+	blocked: boolean,
+}
+
+local VehicleMotion = {}
+
+-- Maximale Stufe, die ein Fahrzeug in einem Frame hochklettern darf.
+VehicleMotion.MAX_STEP_UP = 1.5
+-- Vorausschau vor dem Modellmittelpunkt, damit Waende nicht durchfahren werden.
+VehicleMotion.FRONT_PROBE = 1.35
+-- Start- und Suchtiefe des Boden-Raycasts.
+VehicleMotion.GROUND_RAY_UP = 8
+VehicleMotion.GROUND_RAY_DOWN = 12
+-- Ab dieser horizontalen Geschwindigkeit wird der Boden verfolgt.
+VehicleMotion.MOVE_EPSILON = 0.01
+
+-- Zielhoehe des Model-Pivots aus einem Bodentreffer.
+function VehicleMotion.groundPivotY(groundY: number, pivotHeight: number): number
+	return groundY + pivotHeight
+end
+
+-- Naechste Pivot-Hoehe inklusive Steigungslimit. `blocked` bedeutet, dass die
+-- Stufe zu hoch ist und die Bewegung verworfen werden soll.
+function VehicleMotion.nextPivotY(
+	currentPivotY: number,
+	groundY: number,
+	pivotHeight: number,
+	maxStepUp: number?
+): GroundStep
+	local limit = maxStepUp or VehicleMotion.MAX_STEP_UP
+	local target = VehicleMotion.groundPivotY(groundY, pivotHeight)
+	if target - currentPivotY > limit then
+		return { y = currentPivotY, blocked = true }
+	end
+	return { y = target, blocked = false }
+end
+
+-- Laenge des Wand-Raycasts: gefahrene Strecke plus Vorausschau.
+function VehicleMotion.probeDistance(stepDistance: number, probe: number?): number
+	local forward = math.max(stepDistance, 0)
+	return forward + (probe or VehicleMotion.FRONT_PROBE)
+end
+
+-- Nur bei echter Bewegung Boden und Waende pruefen.
+function VehicleMotion.isMoving(speed: number): boolean
+	return math.abs(speed) > VehicleMotion.MOVE_EPSILON
+end
+
+function VehicleMotion.validate(): boolean
+	assert(VehicleMotion.MAX_STEP_UP > 0, "MAX_STEP_UP must be positive")
+	assert(VehicleMotion.FRONT_PROBE > 0, "FRONT_PROBE must be positive")
+	assert(VehicleMotion.GROUND_RAY_UP > 0, "GROUND_RAY_UP must be positive")
+	assert(VehicleMotion.GROUND_RAY_DOWN > 0, "GROUND_RAY_DOWN must be positive")
+	assert(VehicleMotion.MOVE_EPSILON >= 0, "MOVE_EPSILON must not be negative")
+	return true
+end
+
+assert(VehicleMotion.validate(), "VehicleMotion failed validation on load")
+
+return VehicleMotion
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="86">
+          <Properties>
+            <string name="Name">VehiclePhysics</string>
+            <string name="Source"><![CDATA[--!strict
+-- VehiclePhysics: echte Roblox-Physik fuer Fahrrad und Mofa.
+-- Das Modell bleibt ein zusammenhaengendes, entankertes Assembly; Gravitation,
+-- Kollisionen und Steigungen uebernimmt die Engine. Der Client steuert nur
+-- Ausrichtung (AlignOrientation, starr) und Antrieb (VectorForce).
+-- Es werden ausschliesslich eigene Modelle bewegt; Preise/Besitz bleiben
+-- serverseitig.
+
+local Players = game:GetService("Players")
+
+local VehiclePhysics = {}
+VehiclePhysics.__index = VehiclePhysics
+
+export type Config = {
+	maxSpeed: number,
+	reverseSpeed: number,
+	acceleration: number,
+	brake: number,
+	coast: number,
+	turnRate: number,
+	grip: number,
+}
+
+export type Input = {
+	throttle: number,
+	steer: number,
+	brake: boolean,
+}
+
+export type VehiclePhysics = typeof(setmetatable(
+	{} :: {
+		_model: Model,
+		_primary: BasePart,
+		_attachment: Attachment,
+		_align: AlignOrientation,
+		_force: VectorForce,
+		_config: Config,
+		_params: RaycastParams,
+		_yaw: number,
+		_grounded: boolean,
+		_lastGroundTime: number,
+		_destroyed: boolean,
+	},
+	VehiclePhysics
+))
+
+local GROUND_PROBE_UP = 5
+local GROUND_PROBE_DOWN = 11
+local PITCH_DISTANCE = 2.4
+local MAX_PITCH = 0.55
+
+local function readYaw(part: BasePart): number
+	local _, yaw, _ = part.CFrame:ToEulerAnglesYXZ()
+	return yaw
+end
+
+local function buildRayParams(model: Model): RaycastParams
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.RespectCanCollide = true
+	local filters: { Instance } = { model }
+	local player = Players.LocalPlayer
+	if player ~= nil and player.Character ~= nil then
+		table.insert(filters, player.Character)
+	end
+	params.FilterDescendantsInstances = filters
+	return params
+end
+
+function VehiclePhysics.new(model: Model, config: Config): VehiclePhysics
+	local primary: BasePart? = model.PrimaryPart
+	if primary == nil then
+		primary = model:FindFirstChildWhichIsA("BasePart", true)
+	end
+	assert(primary ~= nil, "vehicle needs a primary part")
+	local drive = primary :: BasePart
+
+	local attachmentInstance = drive:FindFirstChild("ToeffliDriveAttachment")
+	local attachment: Attachment
+	if attachmentInstance ~= nil and attachmentInstance:IsA("Attachment") then
+		attachment = attachmentInstance
+	else
+		attachment = Instance.new("Attachment")
+		attachment.Name = "ToeffliDriveAttachment"
+		attachment.Parent = drive
+	end
+
+	-- Serverseitige Stabilisierung wiederverwenden, damit das Fahrzeug auch
+	-- ohne Client-Besitz nicht umfaellt.
+	local alignInstance = drive:FindFirstChild("ToeffliAlign")
+	local align: AlignOrientation
+	if alignInstance ~= nil and alignInstance:IsA("AlignOrientation") then
+		align = alignInstance
+		align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		align.Attachment0 = attachment
+		align.RigidityEnabled = true
+	else
+		align = Instance.new("AlignOrientation")
+		align.Name = "ToeffliAlign"
+		align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		align.Attachment0 = attachment
+		align.RigidityEnabled = true
+		align.Parent = drive
+	end
+
+	local force = Instance.new("VectorForce")
+	force.Name = "ToeffliForce"
+	force.Attachment0 = attachment
+	force.RelativeTo = Enum.ActuatorRelativeTo.World
+	force.ApplyAtCenterOfMass = true
+	force.Force = Vector3.zero
+	force.Parent = drive
+
+	local self = setmetatable({
+		_model = model,
+		_primary = drive,
+		_attachment = attachment,
+		_align = align,
+		_force = force,
+		_config = config,
+		_params = buildRayParams(model),
+		_yaw = readYaw(drive),
+		_grounded = false,
+		_lastGroundTime = 0,
+		_destroyed = false,
+	}, VehiclePhysics)
+	self:_applyOrientation(0)
+	return self
+end
+
+-- Bodenhoehe bei einem Versatz entlang der Fahrzeugfront (nil = kein Boden).
+function VehiclePhysics._groundAt(self: VehiclePhysics, forward: Vector3, offset: number): number?
+	local origin = self._primary.Position + forward * offset + Vector3.new(0, GROUND_PROBE_UP, 0)
+	local hit = workspace:Raycast(origin, Vector3.new(0, -(GROUND_PROBE_UP + GROUND_PROBE_DOWN), 0), self._params)
+	if hit ~= nil then
+		return hit.Position.Y
+	end
+	return nil
+end
+
+function VehiclePhysics._applyOrientation(self: VehiclePhysics, pitch: number): ()
+	if self._destroyed then
+		return
+	end
+	local position = self._primary.Position
+	self._align.CFrame = CFrame.new(position) * CFrame.fromEulerAnglesYXZ(pitch, self._yaw, 0)
+end
+
+function VehiclePhysics.getSpeed(self: VehiclePhysics): number
+	if self._destroyed then
+		return 0
+	end
+	local velocity = self._primary.AssemblyLinearVelocity
+	return Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+end
+
+function VehiclePhysics.isGrounded(self: VehiclePhysics): boolean
+	return self._grounded
+end
+
+function VehiclePhysics.update(self: VehiclePhysics, dt: number, input: Input): ()
+	if self._destroyed then
+		return
+	end
+	local primary = self._primary
+	local config = self._config
+
+	local velocity = primary.AssemblyLinearVelocity
+	local flatVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+	local flatFrame = CFrame.Angles(0, self._yaw, 0)
+	local forward = flatFrame.LookVector
+	local right = flatFrame.RightVector
+	local along = flatVelocity:Dot(forward)
+
+	-- Lenkung nur bei echter Fahrt, damit das Fahrzeug im Stand nicht dreht.
+	if input.steer ~= 0 and math.abs(along) > 0.6 then
+		local direction = if along >= 0 then 1 else -1
+		local speedFactor = math.clamp(math.abs(along) / math.max(config.maxSpeed, 1), 0, 1)
+		self._yaw += -input.steer * config.turnRate * direction * (0.35 + 0.65 * speedFactor) * dt
+		flatFrame = CFrame.Angles(0, self._yaw, 0)
+		forward = flatFrame.LookVector
+		right = flatFrame.RightVector
+	end
+
+	-- Steigung: vorne/hinten messen und das Modell neigen.
+	local front = self:_groundAt(forward, PITCH_DISTANCE / 2)
+	local rear = self:_groundAt(forward, -PITCH_DISTANCE / 2)
+	local center = self:_groundAt(forward, 0)
+	local pitch = 0
+	if front ~= nil and rear ~= nil then
+		pitch = math.clamp(math.atan2(front - rear, PITCH_DISTANCE), -MAX_PITCH, MAX_PITCH)
+	end
+	local now = os.clock()
+	if center ~= nil then
+		self._lastGroundTime = now
+	end
+	-- Kurze Nachsicht (Coyote): kurze Bodenwellen unterbrechen den Schub nicht.
+	self._grounded = center ~= nil or (now - self._lastGroundTime) < 0.2
+	self:_applyOrientation(pitch)
+
+	local mass = primary.AssemblyMass
+	local forceVector = Vector3.zero
+	if self._grounded then
+		local throttle = input.throttle
+		local forwardAllowed = throttle > 0 and along < config.maxSpeed
+		local reverseAllowed = throttle < 0 and along > -config.reverseSpeed
+		if forwardAllowed or reverseAllowed then
+			forceVector += forward * (config.acceleration * mass * throttle)
+		end
+		if input.brake or throttle == 0 then
+			local rate = if input.brake then config.brake else config.coast
+			forceVector += -flatVelocity * (rate * mass)
+		end
+		local lateral = flatVelocity:Dot(right)
+		forceVector += -right * (lateral * config.grip * mass)
+	end
+
+	forceVector = Vector3.new(forceVector.X, 0, forceVector.Z)
+	self._force.Force = forceVector
+end
+
+function VehiclePhysics.destroy(self: VehiclePhysics): ()
+	if self._destroyed then
+		return
+	end
+	self._destroyed = true
+	self._force.Force = Vector3.zero
+	self._force.Enabled = false
+	self._force:Destroy()
+	-- Attachment und AlignOrientation bleiben: sie halten das Fahrzeug im
+	-- Stand aufrecht und werden beim naechsten Aufsteigen wiederverwendet.
+end
+
+return VehiclePhysics
+]]></string>
+          </Properties>
+        </Item>
       </Item>
-      <Item class="Folder" referent="77">
+      <Item class="Folder" referent="87">
         <Properties>
           <string name="Name">ui</string>
         </Properties>
-        <Item class="ModuleScript" referent="78">
+        <Item class="ModuleScript" referent="88">
           <Properties>
             <string name="Name">DeliveryPrompt</string>
             <string name="Source">--!strict
@@ -14750,7 +16685,7 @@ end
 return DeliveryPrompt</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="79">
+        <Item class="ModuleScript" referent="89">
           <Properties>
             <string name="Name">ShopTerminal</string>
             <string name="Source"><![CDATA[--!strict

@@ -9,6 +9,8 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 
+local VehiclePhysics = require(script.Parent.VehiclePhysics)
+
 export type VehicleStats = {
 	modelId: string,
 	acceleration: number,
@@ -49,6 +51,11 @@ local function clampNumber(value: number, minValue: number, maxValue: number): n
 		return value
 	end
 end
+
+-- Arcade-Physik: kraeftig genug, um Steigungen zu erklimmen.
+local ENGINE_ACCELERATION = 180
+local ENGINE_BRAKE = 14
+local ENGINE_GRIP = 9
 
 local function sanitizeStats(raw: VehicleStats?): VehicleStats
 	if raw == nil then
@@ -97,6 +104,10 @@ export type MopedController = typeof(setmetatable(
 		_speed: number,
 		_seat: VehicleSeat?,
 		_vehicleRoot: BasePart?,
+		_vehicleModel: Model?,
+		_physics: any?,
+		_physicsError: boolean,
+		_mountedAt: number,
 		_connections: { RBXScriptConnection },
 		_onEngineChanged: ((boolean) -> ())?,
 		_onOutOfFuel: (() -> ())?,
@@ -120,6 +131,10 @@ function MopedController.new(initialStats: VehicleStats?): MopedController
 		_speed = 0,
 		_seat = nil,
 		_vehicleRoot = nil,
+		_vehicleModel = nil,
+		_physics = nil,
+		_physicsError = false,
+		_mountedAt = 0,
 		_connections = {},
 		_onEngineChanged = nil,
 		_onOutOfFuel = nil,
@@ -250,7 +265,42 @@ function MopedController.CanMount(self: MopedController, seat: VehicleSeat?, max
 	return distance <= limit
 end
 
-function MopedController.Mount(self: MopedController, seat: VehicleSeat, vehicleRoot: BasePart?)
+-- Baut die Physik-Huelle fuer das aktuell gebundene Modell (idempotent).
+function MopedController._ensurePhysics(self: MopedController): ()
+	if self._physics ~= nil then
+		return
+	end
+	local model = self._vehicleModel
+	if model == nil then
+		return
+	end
+	local ok, result = pcall(VehiclePhysics.new, model, {
+		maxSpeed = self._stats.topSpeed,
+		reverseSpeed = self._stats.reverseSpeed or 4,
+		acceleration = ENGINE_ACCELERATION,
+		brake = ENGINE_BRAKE,
+		coast = 3,
+		turnRate = self._stats.turnRate,
+		grip = ENGINE_GRIP,
+	})
+	if ok then
+		self._physics = result
+		return
+	end
+	if not self._physicsError then
+		self._physicsError = true
+		warn("[ToeffliTal][Physik] Mofa: " .. tostring(result))
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Töffli Tal",
+				Text = "Mofa-Physikfehler – bitte Output melden.",
+				Duration = 8,
+			})
+		end)
+	end
+end
+
+function MopedController.Mount(self: MopedController, seat: VehicleSeat, vehicleRoot: BasePart?, vehicleModel: Model?)
 	if self._destroyed then
 		return false
 	end
@@ -260,25 +310,42 @@ function MopedController.Mount(self: MopedController, seat: VehicleSeat, vehicle
 	self:Dismount()
 	self._seat = seat
 	self._vehicleRoot = vehicleRoot
+	self._vehicleModel = vehicleModel
+	self._mountedAt = os.clock()
+	self:_ensurePhysics()
 	self:_applyStatsToSeat()
 	self:_bindInput()
 	self:_bindPhysics()
 	return true
 end
 
+function MopedController.GetVehicleModel(self: MopedController): Model?
+	return self._vehicleModel
+end
+
 function MopedController.Dismount(self: MopedController)
+	local seat = self._seat
 	local player = Players.LocalPlayer
 	if player ~= nil then
 		local character = player.Character
 		if character ~= nil then
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
-			if humanoid ~= nil and humanoid.SeatPart == self._seat then
+			if humanoid ~= nil and humanoid.SeatPart == seat then
 				humanoid.Sit = false
 			end
 		end
 	end
+	-- Erst nach dem Aufstehen wieder fuer Auto-Aufsitzen sperren.
+	if seat ~= nil then
+		seat.Disabled = true
+	end
+	if self._physics ~= nil then
+		self._physics:destroy()
+		self._physics = nil
+	end
 	self._seat = nil
 	self._vehicleRoot = nil
+	self._vehicleModel = nil
 	self._speed = 0
 	self._input.throttle = 0
 	self._input.brake = 0
@@ -432,14 +499,42 @@ function MopedController._bindInput(self: MopedController)
 	table.insert(self._connections, ended)
 end
 
+-- Fahrt laeuft vollstaendig ueber VehiclePhysics (VectorForce + AlignOrientation).
+
 function MopedController._bindPhysics(self: MopedController)
 	local heartbeat = RunService.Heartbeat:Connect(function(dt: number)
 		if self._seat == nil then
 			return
 		end
+		local player = Players.LocalPlayer
+		local character = if player ~= nil then player.Character else nil
+		local humanoid = if character ~= nil then character:FindFirstChildOfClass("Humanoid") else nil
+		if humanoid == nil or humanoid.SeatPart ~= self._seat then
+			-- Kurz nach dem Aufsteigen Nachsicht, bis Roblox den Sitz zuweist.
+			if os.clock() - self._mountedAt < 0.75 then
+				return
+			end
+			self:Dismount()
+			return
+		end
+		-- Space ist Bremse, nicht Sprung.
+		if humanoid.Jump then
+			humanoid.Jump = false
+		end
+
 		local clampedDt = clampNumber(dt, 0, 1 / 20)
 		self:_consumeFuel(clampedDt)
-		self:_stepSpeed(clampedDt)
+		self:_ensurePhysics()
+		local physics = self._physics
+		if physics ~= nil then
+			local throttle = if self:CanDrive() then self._input.throttle else 0
+			physics:update(clampedDt, {
+				throttle = throttle,
+				steer = self._input.steer,
+				brake = self._input.brake > 0 or self._input.handbrake,
+			})
+			self._speed = physics:getSpeed()
+		end
 		self:_applyInputToSeat()
 	end)
 	table.insert(self._connections, heartbeat)

@@ -14,8 +14,13 @@ end
 
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local DonerShopBuilder = {}
+
+-- Vergroesserungsfaktor des Ladens; der Abholpunkt wird danach exakt
+-- zurueckgesetzt, damit Lieferungen unveraendert bleiben.
+local SHOP_SCALE = 1.5
 
 local SHOP_NAME = "DonerShop"
 local SIGN_TEXT = "Döner Laden"
@@ -87,8 +92,10 @@ function DonerShopBuilder.build(parent: Instance): Model
 	local pickupX: number = pickup.x
 	local pickupZ: number = pickup.z
 
-	local groundY = TerrainHeight.heightAt(centerX, centerZ)
-	local pickupGroundY = TerrainHeight.heightAt(pickupX, pickupZ)
+	local groundY = BuildingPlacement.surfaceAt(centerX, centerZ)
+		or TerrainHeight.heightAt(centerX, centerZ)
+	local pickupGroundY = BuildingPlacement.surfaceAt(pickupX, pickupZ)
+		or TerrainHeight.heightAt(pickupX, pickupZ)
 
 	local model = Instance.new("Model")
 	model.Name = SHOP_NAME
@@ -324,6 +331,11 @@ function DonerShopBuilder.build(parent: Instance): Model
 	pickupPad:SetAttribute("PickupKind", "doner")
 
 	model.PrimaryPart = floorPart
+	BuildingPlacement.scale(model, SHOP_SCALE)
+	BuildingPlacement.ground(model, groundY)
+	-- Abholpunkt darf nicht mitskaliert werden (Lieferziele bleiben exakt).
+	pickupPad.Size = Vector3.new(6, 0.4, 6)
+	pickupPad.Position = Vector3.new(pickupX, pickupGroundY + 0.2, pickupZ)
 	model.Parent = parent
 	return model
 end

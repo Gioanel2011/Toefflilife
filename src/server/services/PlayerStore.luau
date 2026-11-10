@@ -17,6 +17,8 @@ export type Options = {
 	profiles: any,
 	economy: any,
 	schema: any?,
+	-- Nur fuer Studio/Abnahme: Mindestguthaben pro Session. 0 bedeutet aus.
+	sessionGrantCash: number?,
 }
 
 local function toKey(userId: any): string
@@ -61,6 +63,11 @@ function PlayerStore.new(options: Options)
 	self._profiles = options.profiles
 	self._economy = options.economy
 	self._schema = options.schema or PlayerDataSchema
+	local grant = options.sessionGrantCash
+	if type(grant) ~= "number" or grant < 0 then
+		grant = 0
+	end
+	self._sessionGrantCash = math.floor(grant)
 	self._views = {}
 	self._workshopProfiles = {}
 	self._workshopVehicles = {}
@@ -120,6 +127,12 @@ function PlayerStore:load(userId: any): any
 	end
 	local view = defaultView(profile)
 	view.schema = profile
+	-- Studio/Abnahme: Mindestguthaben nur fuer diese Session anheben. Der
+	-- gespeicherte Kontostand bleibt unveraendert, solange nicht ausgegeben
+	-- oder gutgeschrieben wird.
+	if self._sessionGrantCash > 0 and view.money < self._sessionGrantCash then
+		view.money = self._sessionGrantCash
+	end
 	self._views[key] = view
 	local records: { [string]: any } = {}
 	self._workshopProfiles[key] = buildWorkshopProfile(profile, view, records)

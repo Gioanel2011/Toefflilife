@@ -17,6 +17,7 @@ end
 
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local GarageWorldBuilder = {}
 
@@ -75,8 +76,6 @@ function GarageWorldBuilder.build(parent: Instance): Folder
 	local folder = Instance.new("Folder")
 	folder.Name = GarageWorldBuilder.FOLDER_NAME
 
-	local floorOffset = GarageWorldBuilder.FLOOR_THICKNESS / 2
-
 	for index, placement in GarageWorldBuilder.calculatePlacements() do
 		local model = GarageFactory.create(placement.anchorName)
 		model.Name = placement.id
@@ -84,9 +83,14 @@ function GarageWorldBuilder.build(parent: Instance): Folder
 		model:SetAttribute("GarageIndex", index)
 		model:SetAttribute("AnchorName", placement.anchorName)
 		model:SetAttribute("AngleDegrees", placement.angleDegrees)
-		model:PivotTo(
-			CFrame.new(placement.position.x, placement.position.y + floorOffset, placement.position.z)
-				* CFrame.Angles(0, math.rad(placement.yaw), 0)
+		local groundY = BuildingPlacement.surfaceAt(placement.position.x, placement.position.z)
+			or placement.position.y
+		BuildingPlacement.placeOnGround(
+			model,
+			placement.position.x,
+			placement.position.z,
+			groundY,
+			placement.yaw
 		)
 		model.Parent = folder
 	end

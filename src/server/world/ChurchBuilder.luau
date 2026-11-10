@@ -13,8 +13,12 @@ end
 
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local ChurchBuilder = {}
+
+-- Einheitlicher Vergroesserungsfaktor fuer die Kirche.
+local CHURCH_SCALE = 1.7
 
 local WALL_COLOR = Color3.fromRGB(235, 230, 220)
 local ROOF_COLOR = Color3.fromRGB(140, 60, 50)
@@ -48,7 +52,8 @@ end
 -- Erzeugt genau ein Kirchen-Model an der vorgesehenen Position.
 function ChurchBuilder.build(parent: Instance): Model
 	local church = WorldLayout.CHURCH
-	local groundY = TerrainHeight.heightAt(church.position.x, church.position.z)
+	local groundY = BuildingPlacement.surfaceAt(church.position.x, church.position.z)
+		or TerrainHeight.heightAt(church.position.x, church.position.z)
 	local base = CFrame.new(Vector3.new(church.position.x, groundY, church.position.z))
 		* CFrame.Angles(0, math.rad(church.yaw), 0)
 
@@ -92,6 +97,8 @@ function ChurchBuilder.build(parent: Instance): Model
 	model:SetAttribute("ChurchId", church.id)
 	model:SetAttribute("PoiKind", "church")
 	model.PrimaryPart = nave
+	BuildingPlacement.scale(model, CHURCH_SCALE)
+	BuildingPlacement.ground(model, groundY)
 	model.Parent = parent
 	return model
 end

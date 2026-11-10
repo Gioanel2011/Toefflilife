@@ -22,6 +22,7 @@ end
 local WorldLayout = requireSibling("WorldLayout")
 local TerrainHeight = requireSibling("TerrainHeight")
 local BuildingFactory = requireSibling("BuildingFactory")
+local BuildingPlacement = requireSibling("BuildingPlacement")
 
 local VillageBuilder = {}
 
@@ -75,7 +76,8 @@ function VillageBuilder.build(parent: Instance): Folder
 			local model: Model = BuildingFactory.create(definition)
 			model:SetAttribute("SlotId", slot.id)
 			model.Parent = folder
-			local groundY: number = TerrainHeight.heightAt(slot.position.x, slot.position.z)
+			local groundY: number = BuildingPlacement.surfaceAt(slot.position.x, slot.position.z)
+				or TerrainHeight.heightAt(slot.position.x, slot.position.z)
 			local ground = Vector3.new(slot.position.x, groundY, slot.position.z)
 			local rigid = CFrame.new(ground) * CFrame.Angles(0, math.rad(slot.yaw), 0)
 			local pivot: CFrame = model:GetPivot()

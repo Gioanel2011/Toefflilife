@@ -7,6 +7,8 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
 
+local VehiclePhysics = require(script.Parent.VehiclePhysics)
+
 local BicycleController = {}
 BicycleController.__index = BicycleController
 
@@ -20,6 +22,8 @@ export type BicycleController = typeof(setmetatable(
 		_steer: number,
 		_brake: boolean,
 		_mountDebounceUntil: number,
+		_physics: any?,
+		_physicsError: boolean,
 		_inputBegan: RBXScriptConnection?,
 		_inputEnded: RBXScriptConnection?,
 		_stepped: RBXScriptConnection?,
@@ -31,12 +35,12 @@ export type BicycleController = typeof(setmetatable(
 -- Fahrwerte (studs/s, Arcade-Abstimmung).
 local MAX_SPEED = 18
 local MAX_REVERSE_SPEED = 4
-local ACCELERATION = 12
-local BRAKE_DECELERATION = 22
-local COAST_FRICTION = 6
 local TURN_RATE = 1.9
 local MOUNT_DISTANCE = 10
 local MOUNT_COOLDOWN = 0.5
+-- Arcade-Physik: kraeftig genug, um Steigungen zu erklimmen.
+local PEDAL_ACCELERATION = 130
+local PEDAL_BRAKE = 12
 
 -- Auf-/Absteigen per PC-Taste. Es wird nur das eigene Startfahrrad gewaehlt.
 local BICYCLE_TAG = "ToeffliBicycle"
@@ -115,6 +119,8 @@ function BicycleController.new(): BicycleController
 		_steer = 0,
 		_brake = false,
 		_mountDebounceUntil = 0,
+		_physics = nil,
+		_physicsError = false,
 		_inputBegan = nil,
 		_inputEnded = nil,
 		_stepped = nil,
@@ -133,6 +139,13 @@ end
 
 function BicycleController.GetBike(self: BicycleController): Model?
 	return self._bike
+end
+
+-- Kurz nach Auf-/Absteigen ist E fuer andere Fahrzeuge gesperrt, damit ein
+-- einzelner Tastendruck nicht direkt vom Fahrrad auf ein danebenstehendes
+-- Mofa wechselt.
+function BicycleController.IsMountCoolingDown(self: BicycleController): boolean
+	return os.clock() < self._mountDebounceUntil
 end
 
 -- Stabile Aufstiegslogik: Naehe, freier Sitz, lebender Humanoid, Entprellung.
@@ -182,8 +195,48 @@ function BicycleController.Mount(self: BicycleController, bike: Model): boolean
 	self._mounted = true
 	self._speed = 0
 	self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
+	-- Der Sitz ist fuer Auto-Aufsitzen deaktiviert. Fuer den expliziten
+	-- E-Mount wird er freigegeben und erst nach dem Absteigen wieder gesperrt
+	-- (waehrend des Sitzens darf `Disabled` nicht umgeschaltet werden).
+	seat.Disabled = false
 	seat:Sit(humanoid)
+	self:_ensurePhysics()
 	return true
+end
+
+-- Erzeugt die Physik-Huelle nur einmal und meldet Fehler sichtbar im Output.
+function BicycleController._ensurePhysics(self: BicycleController): ()
+	if self._physics ~= nil then
+		return
+	end
+	local bike = self._bike
+	if bike == nil then
+		return
+	end
+	local ok, result = pcall(VehiclePhysics.new, bike, {
+		maxSpeed = MAX_SPEED,
+		reverseSpeed = MAX_REVERSE_SPEED,
+		acceleration = PEDAL_ACCELERATION,
+		brake = PEDAL_BRAKE,
+		coast = 2.4,
+		turnRate = TURN_RATE,
+		grip = 8,
+	})
+	if ok then
+		self._physics = result
+		return
+	end
+	if not self._physicsError then
+		self._physicsError = true
+		warn("[ToeffliTal][Physik] Fahrrad: " .. tostring(result))
+		pcall(function()
+			game:GetService("StarterGui"):SetCore("SendNotification", {
+				Title = "Töffli Tal",
+				Text = "Fahrrad-Physikfehler – bitte Output melden.",
+				Duration = 8,
+			})
+		end)
+	end
 end
 
 function BicycleController.Dismount(self: BicycleController): ()
@@ -198,12 +251,12 @@ function BicycleController.Dismount(self: BicycleController): ()
 	self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
 
 	local seat = self._seat
-	if seat ~= nil then
-		seat.Disabled = true
-		seat.Disabled = false
-	end
 	self._bike = nil
 	self._seat = nil
+	if self._physics ~= nil then
+		self._physics:destroy()
+		self._physics = nil
+	end
 
 	local player = Players.LocalPlayer
 	local character: Model? = nil
@@ -213,8 +266,12 @@ function BicycleController.Dismount(self: BicycleController): ()
 	if character ~= nil then
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		if humanoid ~= nil and humanoid.SeatPart ~= nil then
-			humanoid.Jump = true
+			humanoid.Sit = false
 		end
+	end
+	-- Erst nach dem Aufstehen wieder fuer Auto-Aufsitzen sperren.
+	if seat ~= nil then
+		seat.Disabled = true
 	end
 end
 
@@ -231,6 +288,12 @@ function BicycleController.ToggleMount(self: BicycleController): boolean
 	if player == nil then
 		return false
 	end
+	-- Ein fremdes Fahrzeug (z. B. Mofa) kontrolliert den Sitz. E darf das
+	-- Fahrrad dann nicht gleichzeitig uebernehmen.
+	local humanoid = getCharacterHumanoid(player)
+	if humanoid ~= nil and humanoid.SeatPart ~= nil then
+		return false
+	end
 	local bike = findNearestOwnedBicycle(player, MOUNT_DISTANCE)
 	if bike == nil then
 		return false
@@ -240,6 +303,7 @@ end
 
 -- Gemeinsamer Ruecksetzpfad ohne Sprung (Respawn, externes Absteigen).
 function BicycleController._resetMountState(self: BicycleController, cooldown: boolean): ()
+	local seat = self._seat
 	self._mounted = false
 	self._speed = 0
 	self._throttle = 0
@@ -247,6 +311,13 @@ function BicycleController._resetMountState(self: BicycleController, cooldown: b
 	self._brake = false
 	self._bike = nil
 	self._seat = nil
+	if self._physics ~= nil then
+		self._physics:destroy()
+		self._physics = nil
+	end
+	if seat ~= nil then
+		seat.Disabled = true
+	end
 	if cooldown then
 		self._mountDebounceUntil = os.clock() + MOUNT_COOLDOWN
 	end
@@ -340,10 +411,13 @@ function BicycleController._step(self: BicycleController, dt: number): ()
 	end
 
 	-- Sitzbezug pruefen: externes Absteigen (z. B. Sprung) sauber uebernehmen.
+	-- Direkt nach dem Aufsteigen kurz Nachsicht, bis Roblox den Sitz zuweist.
 	local player = Players.LocalPlayer
 	local humanoid = if player ~= nil then getCharacterHumanoid(player) else nil
 	if humanoid == nil or humanoid.SeatPart ~= self._seat then
-		self:_resetMountState(true)
+		if os.clock() >= self._mountDebounceUntil then
+			self:_resetMountState(true)
+		end
 		return
 	end
 	-- Space ist Bremse, nicht Sprung: Absprung waehrend der Fahrt unterdruecken.
@@ -356,51 +430,15 @@ function BicycleController._step(self: BicycleController, dt: number): ()
 	self._steer = steer
 	self._brake = brake
 
-	-- Beschleunigung / Bremsen / Ausrollen. Fahrrad: reine Tretphysik.
-	if brake then
-		if self._speed > 0 then
-			self._speed = math.max(0, self._speed - BRAKE_DECELERATION * dt)
-		elseif self._speed < 0 then
-			self._speed = math.min(0, self._speed + BRAKE_DECELERATION * dt)
-		end
-	elseif throttle > 0 then
-		self._speed = math.min(MAX_SPEED, self._speed + ACCELERATION * throttle * dt)
-	elseif throttle < 0 then
-		self._speed = math.max(-MAX_REVERSE_SPEED, self._speed + ACCELERATION * throttle * dt)
-	else
-		-- Ausrollen: Reibung zieht Geschwindigkeit gegen null.
-		if self._speed > 0 then
-			self._speed = math.max(0, self._speed - COAST_FRICTION * dt)
-		elseif self._speed < 0 then
-			self._speed = math.min(0, self._speed + COAST_FRICTION * dt)
-		end
+	self:_ensurePhysics()
+	local physics = self._physics
+	if physics == nil then
+		self:Dismount()
+		return
 	end
-
-	-- Lenkung und Vortrieb wirken auf das ganze Model, nicht nur auf `Drive`.
-	-- Anchored Parts folgen keinen Welds; erst PivotTo bewegt Sitz, Raeder und
-	-- den aufgesessenen Charakter gemeinsam.
-	local pivot = bike:GetPivot()
-	local rotated = pivot
-	local speedFactor = math.clamp(math.abs(self._speed) / MAX_SPEED, 0, 1)
-	if speedFactor > 0.01 and steer ~= 0 then
-		local direction = if self._speed >= 0 then 1 else -1
-		local yaw = -steer * TURN_RATE * (0.35 + 0.65 * speedFactor) * direction * dt
-		rotated = pivot * CFrame.Angles(0, yaw, 0)
-	end
-
-	local translation = Vector3.zero
-	if math.abs(self._speed) > 0.01 then
-		local forward = rotated.LookVector
-		-- Vertikale Komponente ignorieren, damit das Rad nicht abhebt.
-		local flat = Vector3.new(forward.X, 0, forward.Z)
-		if flat.Magnitude > 0.001 then
-			translation = flat.Unit * self._speed * dt
-		end
-	end
-
-	if rotated ~= pivot or translation.Magnitude > 0 then
-		bike:PivotTo(rotated + translation)
-	end
+	-- Echte Physik: Antrieb als Kraft, Ausrichtung folgt der Steigung.
+	physics:update(dt, { throttle = throttle, steer = steer, brake = brake })
+	self._speed = physics:getSpeed()
 end
 
 function BicycleController.Start(self: BicycleController): ()

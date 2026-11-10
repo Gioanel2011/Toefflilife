@@ -99,9 +99,9 @@ WorldZones.MAIN_ROAD_WIDTH = 16
 WorldZones.STOP_ROAD_WIDTH = 12
 -- Aussenradius eines Kreisels (Studs).
 WorldZones.ROUNDABOUT_RADIUS = 16
--- Angenommener Ankerradius einer Garage (Studs); groessere Garagen sind
--- unzulaessig, sonst kollidieren sie mit Ringstrasse und Kreiseln.
-WorldZones.GARAGE_RADIUS = 12
+-- Angenommener Ankerradius einer Garage (Studs). Beruecksichtigt den
+-- Vergroesserungsfaktor 1.4 (radiale Tiefe 20*1.4/2 = 14) mit Reserve.
+WorldZones.GARAGE_RADIUS = 16
 -- Mindestabstand zwischen Zonen und Garagen, Gebaeuden bzw. Doerfern.
 WorldZones.MIN_CLEARANCE = 8
 

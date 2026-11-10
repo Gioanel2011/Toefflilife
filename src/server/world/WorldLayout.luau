@@ -104,8 +104,8 @@ local SLOTS_PER_VILLAGE = 10
 local SLOT_RADIUS = 100
 local SLOT_RADIUS_JITTER = 8
 local SLOT_ANGLE_JITTER = 4
-local SLOT_FOOTPRINT: Footprint = { x = 20, z = 16 }
-local DELIVERY_OFFSET = 14
+local SLOT_FOOTPRINT: Footprint = { x = 42, z = 32 }
+local DELIVERY_OFFSET = 20
 
 local GARAGE_COUNT = 15
 local GARAGE_RING_RADIUS = 200
@@ -206,7 +206,7 @@ WorldLayout.CHURCH = {
 	villageId = VILLAGE_PLAN[1].id,
 	position = copyPosition(VILLAGE_PLAN[1].center),
 	yaw = yawTowards(VILLAGE_PLAN[1].center, WorldLayout.DONER.position),
-	footprint = { x = 22, z = 30 },
+	footprint = { x = 26, z = 40 },
 }
 
 -- 15 Garagen auf einem gemeinsamen Ring: gleicher Abstand zum Doenerplatz,

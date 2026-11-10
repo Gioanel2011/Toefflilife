@@ -4,7 +4,12 @@
 -- Bodenbasis Y=0 (Front = -Z); die Positionierung uebernimmt VillageBuilder.
 -- Jedes Haus besitzt sichtbare Eingangstuer, Fenster und eindeutige Dekoration.
 
+local BuildingPlacement = require(script.Parent.BuildingPlacement)
+
 local BuildingFactory = {}
+
+-- Einheitlicher Vergroesserungsfaktor fuer alle Haeuser.
+BuildingFactory.SCALE = 1.7
 
 local function pickString(definition: { [string]: any }, keys: { string }, fallback: string): string
 	local value: any = nil
@@ -266,6 +271,10 @@ function BuildingFactory.create(definition: { [string]: any }): Model
 	if signature ~= "" then
 		model:SetAttribute("DesignSignature", signature)
 	end
+
+	-- Einheitlich vergroessern und Basis exakt auf den lokalen Ursprung legen.
+	BuildingPlacement.scale(model, BuildingFactory.SCALE)
+	BuildingPlacement.ground(model, 0)
 
 	return model
 end
