@@ -63,6 +63,8 @@ local noPlayer = router:handle(nil, "echo", { message = "hi" })
 check(not noPlayer.ok and noPlayer.code == "invalid_player", "nil player rejected")
 local badPlayer = router:handle({ UserId = 0 }, "echo", { message = "hi" })
 check(not badPlayer.ok and badPlayer.code == "invalid_player", "zero userid rejected")
+local simulatedPlayer = router:handle({ UserId = -1 }, "echo", { message = "hi" })
+check(not simulatedPlayer.ok and simulatedPlayer.code == "invalid_player", "simulated userid rejected by router")
 
 -- 7. Handler-Fehler ergeben sichere Fehlerantwort ohne Details.
 router:register("ping", function(_player: any, _payload: any)

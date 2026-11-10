@@ -1165,6 +1165,45 @@ local PAYLOAD_SCHEMAS: { [string]: { [string]: { kind: string, required: boolean
 	echo = {
 		message = { kind = "string", required = true },
 	},
+	EconomyGet = {},
+	EconomyTransfer = {
+		targetUserId = { kind = "number", required = false },
+	},
+	VehicleSelect = {
+		action = { kind = "string", required = false },
+	},
+	VehicleBuy = {
+		vehicleId = { kind = "string", required = true },
+	},
+	MissionProgress = {
+		missionKey = { kind = "string", required = false },
+		claim = { kind = "boolean", required = false },
+	},
+	GarageEnter = {},
+	WorkshopInstall = {
+		vehicleId = { kind = "string", required = true },
+		partId = { kind = "string", required = true },
+	},
+	WorkshopPaint = {
+		vehicleId = { kind = "string", required = true },
+		surface = { kind = "string", required = true },
+		color = { kind = "string", required = true },
+	},
+	ShopCatalog = {
+		modelFilter = { kind = "string", required = false },
+	},
+	ShopBuy = {
+		partId = { kind = "string", required = true },
+		source = { kind = "string", required = false },
+	},
+	DynoRun = {
+		vehicleId = { kind = "string", required = true },
+	},
+	FuelRefill = {
+		action = { kind = "string", required = false },
+		vehicleId = { kind = "string", required = false },
+		liters = { kind = "number", required = false },
+	},
 	DeliveryOrder = {
 		vehicleType = { kind = "string", required = true },
 	},
@@ -1618,18 +1657,26 @@ return StatsCalculator
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
+local DataStoreService = game:GetService("DataStoreService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local ServicesFolder = ServerScriptService:WaitForChild("Services")
 
 local GameConfig = require(Shared:WaitForChild("GameConfig"))
 local PlayerDataSchema = require(Shared:WaitForChild("data"):WaitForChild("PlayerDataSchema"))
+local VehicleCatalog = require(Shared:WaitForChild("data"):WaitForChild("VehicleCatalog"))
+local PartsCatalog = require(Shared:WaitForChild("data"):WaitForChild("PartsCatalog"))
 local RemoteProtocol = require(Shared:WaitForChild("net"):WaitForChild("RemoteProtocol"))
 
 local ServerRoot = script.Parent
 local ProfileService = require(ServerRoot:WaitForChild("services"):WaitForChild("ProfileService"))
+local ProfileAdapter = require(ServerRoot:WaitForChild("services"):WaitForChild("ProfileAdapter"))
+local PlayerStore = require(ServerRoot:WaitForChild("services"):WaitForChild("PlayerStore"))
+local GameplayHandlers = require(ServerRoot:WaitForChild("services"):WaitForChild("GameplayHandlers"))
 local RequestRouter = require(ServerRoot:WaitForChild("net"):WaitForChild("RequestRouter"))
+local PlayerIds = require(ServerRoot:WaitForChild("net"):WaitForChild("PlayerIds"))
 local EconomyService = require(ServerRoot:WaitForChild("services"):WaitForChild("EconomyService"))
 local VehicleService = require(ServerRoot:WaitForChild("services"):WaitForChild("VehicleService"))
 local MissionService = require(ServerRoot:WaitForChild("services"):WaitForChild("MissionService"))
@@ -1650,9 +1697,33 @@ local _MaxPlayers: number = GameConfig.MAX_PLAYERS :: any
 local remotes: { [string]: Instance } = {}
 local connections: { RBXScriptConnection } = {}
 local shuttingDown = false
--- Echte Economy-Instanz (nicht das Modul), damit Lieferungen serverseitig
--- genau einmal gutgeschrieben werden.
+-- Studio-Mehrclient vergibt negative UserIds (-1..-8). Nur in Studio werden
+-- sie auf einen reservierten positiven Bereich abgebildet; der Live-Server
+-- bleibt bei der strengen Pruefung. Alle Services und der Router erhalten
+-- dieselbe kanonische ID.
+local allowSimulatedPlayers = RunService:IsStudio()
+-- Echte Service-Instanzen (nicht die Module), damit Profile, Guthaben und
+-- Spielerzustand serverseitig zusammenlaufen.
 local economyService: any = nil
+local profileService: any = nil
+local playerStore: any = nil
+local vehicleServiceInst: any = nil
+local fuelServiceInst: any = nil
+local dynoServiceInst: any = nil
+local transactionCounter = 0
+
+local function canonicalUserId(player: Player): number?
+	return PlayerIds.canonical(player.UserId, allowSimulatedPlayers)
+end
+
+-- Fuer Services, die nur die UserId benoetigen (z. B. GarageService).
+local function servicePlayer(player: Player): any
+	local userId = canonicalUserId(player)
+	if userId == nil then
+		return player
+	end
+	return { UserId = userId }
+end
 
 local function getModuleFn(module: any, name: string): any
 	local fn = (module :: any)[name]
@@ -1736,76 +1807,220 @@ local function setupRemotes(): Folder
 	return netFolder
 end
 
+-- Produktion: DataStore. Studio/Test: In-Memory, damit Play Solo ohne
+-- API-Zugriff deterministisch bleibt. Fehler fallen auf In-Memory zurueck.
+local function buildProfileAdapter(): any
+	if RunService:IsStudio() then
+		return ProfileAdapter.memory()
+	end
+	local ok, store = pcall(function()
+		return DataStoreService:GetDataStore("ToeffliTalProfiles_v1")
+	end)
+	if not ok or store == nil then
+		warn("[ToeffliTal][Server] DataStore nicht verfuegbar; Profile bleiben session-lokal")
+		return ProfileAdapter.memory()
+	end
+	return ProfileAdapter.dataStore(store)
+end
+
+local function playerPosition(userId: number): Vector3?
+	local player = Players:GetPlayerByUserId(userId)
+	if player == nil or player.Character == nil then
+		return nil
+	end
+	local root = player.Character:FindFirstChild("HumanoidRootPart")
+	if root ~= nil and root:IsA("BasePart") then
+		return root.Position
+	end
+	return nil
+end
+
+local function garageAnchorPosition(garageId: string): Vector3?
+	for _, anchor in WorldLayout.getGarageAnchors() do
+		if anchor.id == garageId then
+			local point = anchor.position
+			return Vector3.new(point.x, point.y, point.z)
+		end
+	end
+	return nil
+end
+
+-- Echte serverseitige Naehekontrolle fuer die eigene Garage. Kein Clientwert.
+local function isNearOwnGarage(userId: any): boolean
+	local numericId = tonumber(userId)
+	if numericId == nil then
+		return false
+	end
+	local garageId = GarageService.getGarage(numericId)
+	if garageId == nil then
+		return false
+	end
+	local anchor = garageAnchorPosition(garageId)
+	local position = playerPosition(numericId)
+	if anchor == nil or position == nil then
+		return false
+	end
+	return (position - anchor).Magnitude <= 24
+end
+
+local function isNearStore(_userId: any): boolean
+	-- Es gibt noch kein gebautes Toeffli-Ladengebaeude; Bestellungen laufen
+	-- deshalb ausschliesslich ueber das Laptop-Terminal. Kein Clientwert.
+	return false
+end
+
+local function isOwnerOfVehicleKey(userId: any, vehicleKey: any): boolean
+	if type(vehicleKey) ~= "string" then
+		return false
+	end
+	local prefix = tostring(userId) .. ":"
+	if string.sub(vehicleKey, 1, #prefix) ~= prefix then
+		return false
+	end
+	local vehicleId = string.sub(vehicleKey, #prefix + 1)
+	if playerStore == nil then
+		return false
+	end
+	return playerStore:owns(userId, vehicleId)
+end
+
+local function nextTransactionId(userId: number, kind: string): string
+	transactionCounter += 1
+	return string.format("%s:%s:%d:%d", kind, tostring(userId), os.time(), transactionCounter)
+end
+
+local function registerVehicle(userId: number, vehicleId: string): ()
+	if playerStore == nil or fuelServiceInst == nil or dynoServiceInst == nil then
+		return
+	end
+	local definition = VehicleCatalog.get(vehicleId)
+	if definition == nil then
+		return
+	end
+	local vehicleKey = playerStore:vehicleKey(userId, vehicleId)
+	fuelServiceInst:RegisterVehicle(vehicleKey, userId, {
+		modelId = vehicleId,
+		kind = definition.Class,
+		hasEngine = definition.Fuel.HasEngine,
+		tankVolume = definition.Fuel.TankLiters,
+	})
+	local record = playerStore:workshopVehicle(userId, vehicleId)
+	local parts: any = {}
+	if record ~= nil then
+		parts = record.parts
+	end
+	dynoServiceInst:RegisterVehicle(vehicleKey, userId, {
+		id = vehicleId,
+		modelId = vehicleId,
+		kind = definition.Class,
+		hasEngine = definition.Fuel.HasEngine,
+		physics = definition.Physics,
+	}, parts)
+end
+
+local function registerOwnedVehicles(userId: number): ()
+	for _, vehicleId in ipairs(playerStore:owned(userId)) do
+		registerVehicle(userId, vehicleId)
+	end
+end
+
 -- 3-5. Services in Abhängigkeitsreihenfolge initialisieren und Router verdrahten.
 local function setupServices(netFolder: Folder): ()
-	callOptional(ProfileService, "init")
-	callOptional(EconomyService, "init", { profiles = ProfileService })
-	callOptional(VehicleService, "init", { profiles = ProfileService, economy = EconomyService })
-	callOptional(MissionService, "init", { profiles = ProfileService, economy = EconomyService })
+	profileService = ProfileService.new(buildProfileAdapter(), PlayerDataSchema)
+	economyService = EconomyService.new()
+
 	local garageAnchors = collectGarageAnchorIds()
 	assert(
 		#garageAnchors == 15,
 		string.format("GarageService erwartet 15 Weltanker, gefunden: %d", #garageAnchors)
 	)
-	callOptional(GarageService, "init", { profiles = ProfileService, anchors = garageAnchors })
-	callOptional(WorkshopService, "init", {
-		profiles = ProfileService,
-		economy = EconomyService,
-		garage = GarageService,
-	})
-	callOptional(ShopService, "init", { profiles = ProfileService, economy = EconomyService })
-	callOptional(DynoService, "init", { profiles = ProfileService, garage = GarageService })
-	callOptional(FuelService, "init", { profiles = ProfileService, economy = EconomyService })
+	GarageService.init({ anchors = garageAnchors })
 
-	-- Echte Economy-Instanz für serverseitige Gutschriften.
-	economyService = EconomyService.new()
+	playerStore = PlayerStore.new({ profiles = profileService, economy = economyService })
+
+	-- Preise kommen ausschliesslich aus den Serverkatalogen.
+	vehicleServiceInst = VehicleService.new()
+	local shopCatalog: { [string]: any } = {}
+	local workshopParts: { [string]: any } = {}
+	for _, part in PartsCatalog.Parts do
+		shopCatalog[part.id] = {
+			id = part.id,
+			price = part.price,
+			slot = part.slot,
+			models = part.compatibleModels,
+		}
+		workshopParts[part.id] = { slot = part.slot, models = part.compatibleModels }
+	end
+	local shopServiceInst = ShopService.new({
+		catalog = shopCatalog,
+		profiles = playerStore:getVehicleProfiles(),
+		isNearStore = isNearStore,
+	})
+	local workshopServiceInst = WorkshopService.new({
+		profiles = playerStore:getWorkshopProfiles(),
+		parts = workshopParts,
+		isWorkshopActive = isNearOwnGarage,
+	})
+	fuelServiceInst = FuelService.new({
+		isOwner = isOwnerOfVehicleKey,
+		isAtGasStation = function(_userId: any, _vehicleKey: any): boolean
+			-- Es gibt noch keine Tankstelle in der Welt; ehrliche Ablehnung.
+			return false
+		end,
+		debit = function(userId: any, amount: number, transactionId: string?): (boolean, string?)
+			-- EconomyService rechnet in ganzen CHF; Tankkosten sind gerundet.
+			local tx = transactionId
+			if type(tx) ~= "string" or tx == "" then
+				transactionCounter += 1
+				tx = string.format("fuel:%s:%d:%d", tostring(userId), os.time(), transactionCounter)
+			end
+			local ok, result = economyService:debit(userId, math.ceil(amount), tx :: string)
+			if not ok then
+				return false, tostring(result)
+			end
+			return true, nil
+		end,
+	})
+	dynoServiceInst = DynoService.new({ isOwner = isOwnerOfVehicleKey })
+	local missionServiceInst = MissionService.new()
 
 	-- Der Router erwartet eine tabellenbasierte Spielerzuordnung; echte Player
-	-- sind userdata. Darum läuft pro UserId genau eine Aufzeichnung mit den
-	-- serverseitig bekannten Werten (UserId, aktueller Character).
+	-- sind userdata. Darum läuft pro kanonischer UserId genau eine
+	-- Aufzeichnung mit den serverseitig bekannten Werten (UserId, Character).
 	local requestPlayers: { [number]: any } = {}
 	local function requestPlayer(player: Player): any
-		local record = requestPlayers[player.UserId]
+		local userId = canonicalUserId(player)
+		if userId == nil then
+			-- Ungueltige IDs bleiben unveraendert; der Router weist sie mit
+			-- `invalid_player` ab, statt sie stillschweigend abzubilden.
+			return { UserId = player.UserId, Character = player.Character }
+		end
+		local record = requestPlayers[userId]
 		if record == nil then
-			record = { UserId = player.UserId, Character = player.Character }
-			requestPlayers[player.UserId] = record
+			record = { UserId = userId, Character = player.Character }
+			requestPlayers[userId] = record
 		else
 			record.Character = player.Character
 		end
 		return record
 	end
 
-	-- Generischer Router als echte Instanz (nicht `RequestRouter.init`, das es
-	-- nicht gibt). Nicht registrierte Aktionen antworten sofort mit
-	-- `unknown_action`, statt den Client hängen zu lassen.
+	-- Generischer Router als echte Instanz. Nicht registrierte Aktionen
+	-- antworten sofort mit `unknown_action`, statt den Client hängen zu lassen.
 	local genericRouter = RequestRouter.new()
-
-	-- Fahrzeugauswahl: nur serverseitig bekannte Standardwerte aus dem
-	-- versionierten Spielerschema; keine Clientwerte.
-	local function vehicleSelectHandler(_player: any, payload: any): any
-		local defaults = PlayerDataSchema.createDefault()
-		local action = payload.action
-		if action == nil or action == "getActive" then
-			return {
-				ok = true,
-				selected = defaults.vehicles.selected,
-				owned = defaults.vehicles.owned,
-				cash = defaults.cash,
-			}
-		end
-		return { ok = false, code = "unsupportedAction" }
-	end
-	genericRouter:register("VehicleSelect", vehicleSelectHandler)
-
-	-- Guthabenabfrage: ausschliesslich das eigene Konto.
-	local function economyGetHandler(player: any, _payload: any): any
-		local balance = 0
-		if economyService ~= nil then
-			balance = economyService:getBalance(player.UserId)
-		end
-		return { ok = true, cash = balance }
-	end
-	genericRouter:register("EconomyGet", economyGetHandler)
+	GameplayHandlers.register(genericRouter, {
+		playerStore = playerStore,
+		vehicleService = vehicleServiceInst,
+		shopService = shopServiceInst,
+		workshopService = workshopServiceInst,
+		garageService = GarageService,
+		dynoService = dynoServiceInst,
+		fuelService = fuelServiceInst,
+		missionService = missionServiceInst,
+		economy = economyService,
+		onVehicleOwned = registerVehicle,
+		nextTransactionId = nextTransactionId,
+	})
 
 	-- Alle generischen Remotes an den Router binden; die drei Delivery-Aktionen
 	-- bleiben dem dedizierten Delivery-Router vorbehalten.
@@ -1869,21 +2084,32 @@ local function onPlayerAdded(player: Player): ()
 	if shuttingDown then
 		return
 	end
-	callOptional(ProfileService, "loadPlayer", player)
-	callOptional(GarageService, "assignGarage", player)
-	callOptional(MissionService, "onPlayerJoined", player)
-	callOptional(DeliveryService, "onPlayerJoined", player)
+	local userId = canonicalUserId(player)
+	if userId == nil then
+		warn(string.format("[ToeffliTal][Server] Ungueltige UserId: %s", tostring(player.UserId)))
+		return
+	end
+	local loaded, err = pcall(function()
+		playerStore:load(userId)
+	end)
+	if not loaded then
+		warn(string.format("[ToeffliTal][Server] Profil konnte nicht geladen werden: %s", tostring(err)))
+	end
+	callOptional(GarageService, "assignGarage", servicePlayer(player))
+	registerOwnedVehicles(userId)
 	spawnPlayer(player)
 end
 
 local function onPlayerRemoving(player: Player): ()
-	callOptional(DeliveryService, "onPlayerLeaving", player)
-	callOptional(MissionService, "onPlayerLeaving", player)
-	callOptional(GarageService, "releaseGarage", player)
-	callOptional(FuelService, "onPlayerLeaving", player)
+	local userId = canonicalUserId(player)
+	callOptional(GarageService, "releaseGarage", servicePlayer(player))
 	BicycleSpawner.releaseForPlayer(player)
-	callOptional(ProfileService, "savePlayer", player)
-	callOptional(ProfileService, "unloadPlayer", player)
+	if userId ~= nil and playerStore ~= nil then
+		local ok, err = playerStore:release(userId)
+		if not ok then
+			warn(string.format("[ToeffliTal][Server] Profil konnte nicht gespeichert werden: %s", tostring(err)))
+		end
+	end
 end
 
 local function shutdown(): ()
@@ -1895,17 +2121,11 @@ local function shutdown(): ()
 		conn:Disconnect()
 	end
 	table.clear(connections)
-	callOptional(RequestRouter, "shutdown")
 	-- Persistenz vor Welt-Abbau: kein Datenverlust beim Herunterfahren.
-	for _, player in Players:GetPlayers() do
-		local ok, _ = pcall(function()
-			callOptional(ProfileService, "savePlayer", player)
-		end)
-		if not ok then
-			continue
-		end
+	if playerStore ~= nil then
+		local saved, failed = playerStore:saveAll()
+		print(string.format("[ToeffliTal][Server] Profile gespeichert: %d, fehlgeschlagen: %d", saved, failed))
 	end
-	callOptional(ProfileService, "shutdown")
 	callOptional(ValleyWorld, "cleanup")
 	print("[ToeffliTal][Server] Shutdown complete")
 end
@@ -1917,7 +2137,7 @@ local function init(): ()
 	ValleyWorld.build(workspace)
 	-- 6b. Lieferpunkte entstehen mit der Welt: DeliveryService danach konfigurieren.
 	DeliveryService.init({
-		profiles = ProfileService,
+		profiles = profileService,
 		economy = economyService,
 		world = ValleyWorld,
 		-- Der Vertical Slice startet nur mit dem Fahrrad. Alle aktuellen
@@ -1945,6 +2165,61 @@ init()
           <string name="Name">net</string>
         </Properties>
         <Item class="ModuleScript" referent="16">
+          <Properties>
+            <string name="Name">PlayerIds</string>
+            <string name="Source"><![CDATA[--!strict
+-- PlayerIds: kanonische serverseitige Spieler-IDs.
+-- Studio-Mehrclient vergibt negative UserIds (-1..-8). Alle Services arbeiten
+-- mit positiven Ganzzahlen; darum werden simulierte IDs ausschliesslich in
+-- Studio auf einen reservierten positiven Bereich abgebildet. Keine
+-- Roblox-Laufzeit, damit die Logik mit `lune run` testbar bleibt.
+-- Keine globalen Variablen.
+
+local PlayerIds = {}
+
+-- Reservierter Bereich oberhalb realistischer Roblox-UserIds.
+PlayerIds.SIMULATED_OFFSET = 9_000_000_000
+
+local function isInteger(value: any): boolean
+	if type(value) ~= "number" then
+		return false
+	end
+	local number = value :: number
+	if number ~= number then
+		return false
+	end
+	if number == math.huge or number == -math.huge then
+		return false
+	end
+	return math.floor(number) == number
+end
+
+-- Simulierte Studio-Clients erkennt man an der negativen UserId.
+function PlayerIds.isSimulated(userId: any): boolean
+	return isInteger(userId) and (userId :: number) < 0
+end
+
+-- `allowSimulated` darf nur in Studio (`RunService:IsStudio()`) true sein.
+-- Liefert `nil` fuer IDs, die serverseitig nicht zulaessig sind.
+function PlayerIds.canonical(userId: any, allowSimulated: boolean?): number?
+	if not isInteger(userId) then
+		return nil
+	end
+	local number = userId :: number
+	if number > 0 then
+		return number
+	end
+	if number < 0 and allowSimulated == true then
+		return PlayerIds.SIMULATED_OFFSET + math.abs(number)
+	end
+	return nil
+end
+
+return PlayerIds
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="17">
           <Properties>
             <string name="Name">RequestRouter</string>
             <string name="Source"><![CDATA[-- RequestRouter: serverseitiger Router mit Handler-Registrierung,
@@ -2124,11 +2399,11 @@ return RequestRouter
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="17">
+      <Item class="Folder" referent="18">
         <Properties>
           <string name="Name">services</string>
         </Properties>
-        <Item class="ModuleScript" referent="18">
+        <Item class="ModuleScript" referent="19">
           <Properties>
             <string name="Name">DeliveryService</string>
             <string name="Source"><![CDATA[--!strict
@@ -2706,7 +2981,7 @@ return DeliveryService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="19">
+        <Item class="ModuleScript" referent="20">
           <Properties>
             <string name="Name">DynoService</string>
             <string name="Source"><![CDATA[--!strict
@@ -3029,7 +3304,7 @@ return DynoService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="20">
+        <Item class="ModuleScript" referent="21">
           <Properties>
             <string name="Name">EconomyService</string>
             <string name="Source"><![CDATA[--!strict
@@ -3227,7 +3502,7 @@ return EconomyService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="21">
+        <Item class="ModuleScript" referent="22">
           <Properties>
             <string name="Name">FuelService</string>
             <string name="Source"><![CDATA[--!strict
@@ -3640,7 +3915,352 @@ return FuelService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="22">
+        <Item class="ModuleScript" referent="23">
+          <Properties>
+            <string name="Name">GameplayHandlers</string>
+            <string name="Source"><![CDATA[--!strict
+-- GameplayHandlers: registriert die generischen Remotes am RequestRouter.
+-- Alle Preise, Rabatte, Besitzpruefungen, Distanzen und Zustaende stammen aus
+-- den Services; Payloads liefern nur IDs und optional harmlose Quellen.
+-- Keine Roblox-Laufzeit, damit die Handler mit `lune run` testbar bleiben.
+-- Keine globalen Variablen.
+
+local PartsCatalog = require("../../shared/data/PartsCatalog")
+
+local GameplayHandlers = {}
+
+-- Modul-lokaler Fallback, falls der Bootstrap keinen Transaktionszaehler
+-- injiziert. Keine globalen Variablen.
+local fallbackTransactionCounter = 0
+
+export type Deps = {
+	playerStore: any,
+	vehicleService: any,
+	shopService: any,
+	workshopService: any,
+	garageService: any,
+	dynoService: any,
+	fuelService: any,
+	missionService: any,
+	economy: any,
+	onVehicleOwned: ((userId: number, vehicleId: string) -> ())?,
+	nextTransactionId: ((userId: number, kind: string) -> string)?,
+}
+
+local function reply(payload: any?): any
+	local result: any = { ok = true }
+	if payload ~= nil then
+		for key, value in pairs(payload) do
+			result[key] = value
+		end
+	end
+	return result
+end
+
+local function reject(code: any?): any
+	if type(code) == "string" and code ~= "" then
+		return { ok = false, code = code }
+	end
+	return { ok = false, code = "failed" }
+end
+
+local function catalogList(shopService: any): { any }
+	local list: { any } = {}
+	for _, entry in ipairs(shopService:getCatalog()) do
+		local part = PartsCatalog.getPartById(entry.id)
+		table.insert(list, {
+			id = entry.id,
+			name = if part ~= nil then part.name else entry.id,
+			category = if part ~= nil then part.slot elseif entry.slot ~= nil then entry.slot else "misc",
+			price = entry.price,
+			compatibleModels = if part ~= nil then part.compatibleModels else {},
+			mountPoint = if part ~= nil then part.mountPoint else nil,
+		})
+	end
+	return list
+end
+
+function GameplayHandlers.register(router: any, deps: Deps): ()
+	local playerStore = deps.playerStore
+	local economy = deps.economy
+
+	local function transactionId(userId: number, kind: string): string
+		if deps.nextTransactionId ~= nil then
+			return deps.nextTransactionId(userId, kind)
+		end
+		fallbackTransactionCounter += 1
+		return string.format("%s:%s:%d", kind, tostring(userId), fallbackTransactionCounter)
+	end
+
+	local function prepare(userId: number): any
+		local view = playerStore:ensure(userId)
+		playerStore:refreshMoney(userId)
+		return view
+	end
+
+	local function persist(userId: number): ()
+		playerStore:sync(userId)
+		playerStore:save(userId)
+	end
+
+	local function vehicleSelect(_player: any, _payload: any): any
+		local userId = _player.UserId
+		prepare(userId)
+		local view = playerStore:view(userId)
+		return reply({
+			selected = view.selectedVehicle,
+			owned = playerStore:owned(userId),
+			cash = view.money,
+		})
+	end
+
+	local function economyGet(player: any, _payload: any): any
+		prepare(player.UserId)
+		return reply({ cash = economy:getBalance(player.UserId) })
+	end
+
+	local function vehicleBuy(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local view = playerStore:view(userId)
+		local purchased, outcome = deps.vehicleService:purchase(view, payload.vehicleId, userId)
+		if not purchased then
+			return reject(outcome)
+		end
+		playerStore:commitMoney(userId)
+		playerStore:sync(userId)
+		if deps.onVehicleOwned ~= nil then
+			deps.onVehicleOwned(userId, payload.vehicleId)
+		end
+		persist(userId)
+		return reply({
+			receipt = outcome,
+			selected = view.selectedVehicle,
+			owned = playerStore:owned(userId),
+			cash = view.money,
+		})
+	end
+
+	local function missionProgress(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local claimInfo: any = nil
+		if payload.claim == true then
+			if type(payload.missionKey) ~= "string" or payload.missionKey == "" then
+				return reject("invalid_mission")
+			end
+			local missionKey = payload.missionKey :: string
+			local claimed, info = deps.missionService:claimReward(userId, missionKey, function(reward: number)
+				local creditOk, creditErr = economy:credit(
+					userId,
+					reward,
+					string.format("mission:%s:%s", tostring(userId), missionKey)
+				)
+				if not creditOk then
+					error(creditErr or "credit_failed")
+				end
+			end)
+			if not claimed then
+				local reason: any = info
+				if type(reason) == "table" then
+					return reject(reason.reason)
+				end
+				return reject("claim_failed")
+			end
+			claimInfo = info
+			playerStore:refreshMoney(userId)
+			persist(userId)
+		end
+		return reply({
+			missions = deps.missionService.getMissions(),
+			state = deps.missionService:getState(userId),
+			claim = claimInfo,
+			cash = playerStore:cash(userId),
+		})
+	end
+
+	local function garageEnter(player: any, _payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local garageId = deps.garageService.getGarage(userId)
+		if garageId == nil then
+			return reject("no_garage")
+		end
+		return reply({
+			garage = garageId,
+			cash = playerStore:cash(userId),
+		})
+	end
+
+	local function workshopInstall(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local installed, code = deps.workshopService:installPart(
+			tostring(userId),
+			payload.vehicleId,
+			payload.partId,
+			{ source = "workshop" }
+		)
+		if not installed then
+			return reject(code)
+		end
+		local record = playerStore:workshopVehicle(userId, payload.vehicleId)
+		persist(userId)
+		return reply({
+			vehicleId = payload.vehicleId,
+			parts = if record ~= nil then record.parts else {},
+			inventory = playerStore:view(userId).inventory,
+		})
+	end
+
+	local function workshopPaint(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local painted, code = deps.workshopService:paint(
+			tostring(userId),
+			payload.vehicleId,
+			{ surface = payload.surface, color = payload.color },
+			{ source = "workshop" }
+		)
+		if not painted then
+			return reject(code)
+		end
+		local record = playerStore:workshopVehicle(userId, payload.vehicleId)
+		persist(userId)
+		return reply({
+			vehicleId = payload.vehicleId,
+			colors = if record ~= nil then record.colors else {},
+		})
+	end
+
+	local function shopCatalog(player: any, _payload: any): any
+		prepare(player.UserId)
+		return reply({ parts = catalogList(deps.shopService) })
+	end
+
+	local function shopBuy(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local key = tostring(userId)
+		local tx = transactionId(userId, "shop")
+		local bought: boolean
+		local code: string
+		if payload.source == "store" then
+			bought, code = deps.shopService:buyFromStore(key, payload.partId, tx)
+		else
+			bought, code = deps.shopService:orderPart(key, payload.partId, tx)
+		end
+		if not bought then
+			return reject(code)
+		end
+		playerStore:commitMoney(userId)
+		persist(userId)
+		return reply({
+			partId = payload.partId,
+			inventory = deps.shopService:getInventory(key),
+			cash = playerStore:cash(userId),
+		})
+	end
+
+	local function dynoRun(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		local vehicleKey = playerStore:vehicleKey(userId, payload.vehicleId)
+		local started, result = deps.dynoService:StartRun(userId, vehicleKey)
+		if not started then
+			return reject(result)
+		end
+		return reply({ result = result, cash = playerStore:cash(userId) })
+	end
+
+	local function fuelRefill(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		if payload.action == "requestRescue" then
+			local vehicleId: any = payload.vehicleId
+			if type(vehicleId) ~= "string" or vehicleId == "" then
+				vehicleId = playerStore:selected(userId)
+			end
+			if type(vehicleId) ~= "string" or vehicleId == "" then
+				return reject("no_vehicle")
+			end
+			local vehicleKey = playerStore:vehicleKey(userId, vehicleId)
+			local refilled, result = deps.fuelService:RescueRefill(userId, vehicleKey)
+			if not refilled then
+				return reject(result)
+			end
+			playerStore:refreshMoney(userId)
+			persist(userId)
+			return reply({ refuel = result, cash = playerStore:cash(userId) })
+		end
+		local vehicleId: any = payload.vehicleId
+		if type(vehicleId) ~= "string" or vehicleId == "" then
+			return reject("invalid_vehicle")
+		end
+		if type(payload.liters) ~= "number" then
+			return reject("invalid_amount")
+		end
+		local vehicleKey = playerStore:vehicleKey(userId, vehicleId)
+		local refilled, result = deps.fuelService:Refuel(userId, vehicleKey, payload.liters, {
+			transactionId = transactionId(userId, "fuel"),
+		})
+		if not refilled then
+			return reject(result)
+		end
+		playerStore:refreshMoney(userId)
+		persist(userId)
+		return reply({ refuel = result, cash = playerStore:cash(userId) })
+	end
+
+	local function economyTransfer(player: any, payload: any): any
+		local userId = player.UserId
+		prepare(userId)
+		if payload.targetUserId ~= nil and tostring(payload.targetUserId) ~= tostring(userId) then
+			return reject("access_denied")
+		end
+		return reply({ cash = economy:getBalance(userId) })
+	end
+
+	local handlers: { [string]: any } = {
+		VehicleSelect = vehicleSelect,
+		EconomyGet = economyGet,
+		VehicleBuy = vehicleBuy,
+		MissionProgress = missionProgress,
+		GarageEnter = garageEnter,
+		WorkshopInstall = workshopInstall,
+		WorkshopPaint = workshopPaint,
+		ShopCatalog = shopCatalog,
+		ShopBuy = shopBuy,
+		DynoRun = dynoRun,
+		FuelRefill = fuelRefill,
+		EconomyTransfer = economyTransfer,
+	}
+	local limits: { [string]: { number } } = {
+		VehicleBuy = { 5, 1 },
+		ShopBuy = { 10, 1 },
+		WorkshopInstall = { 10, 1 },
+		WorkshopPaint = { 10, 1 },
+		DynoRun = { 5, 1 },
+		FuelRefill = { 10, 1 },
+		MissionProgress = { 20, 1 },
+		EconomyTransfer = { 10, 1 },
+	}
+	for action, handler in pairs(handlers) do
+		router:register(action, handler)
+		local limit = limits[action]
+		if limit ~= nil then
+			pcall(function()
+				router:setRateLimit(action, limit[1], limit[2])
+			end)
+		end
+	end
+end
+
+return GameplayHandlers
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="24">
           <Properties>
             <string name="Name">GarageService</string>
             <string name="Source"><![CDATA[--!strict
@@ -4056,7 +4676,7 @@ return GarageService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="23">
+        <Item class="ModuleScript" referent="25">
           <Properties>
             <string name="Name">MissionService</string>
             <string name="Source"><![CDATA[--!strict
@@ -4337,7 +4957,402 @@ return MissionService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="24">
+        <Item class="ModuleScript" referent="26">
+          <Properties>
+            <string name="Name">PlayerStore</string>
+            <string name="Source"><![CDATA[--!strict
+-- PlayerStore: Bruecke zwischen dem persistierten PlayerDataSchema und den
+-- Service-Sichten. `PlayerDataSchema` bleibt das Speicherformat (`cash`,
+-- `vehicles.owned`, `vehicles.selected`); VehicleService und ShopService
+-- erhalten eine Sicht mit `money`, `inventory`, `vehicles` und
+-- `selectedVehicle`, WorkshopService eine Sicht mit Fahrzeug-Records.
+-- `EconomyService` bleibt waehrend einer Session die Geldquelle; beim Laden
+-- wird `cash` uebernommen, beim Speichern zurueckgeschrieben.
+-- Keine Roblox-Laufzeit, keine globalen Variablen.
+
+local PlayerDataSchema = require("../../shared/data/PlayerDataSchema")
+
+local PlayerStore = {}
+PlayerStore.__index = PlayerStore
+
+export type Options = {
+	profiles: any,
+	economy: any,
+	schema: any?,
+}
+
+local function toKey(userId: any): string
+	return tostring(userId)
+end
+
+local function copyMap(source: { [string]: any }?): { [string]: any }
+	local copy: { [string]: any } = {}
+	if source ~= nil then
+		for key, value in pairs(source) do
+			copy[key] = value
+		end
+	end
+	return copy
+end
+
+local function copyList(source: { string }?): { string }
+	local copy: { string } = {}
+	if source ~= nil then
+		for _, value in ipairs(source) do
+			table.insert(copy, value)
+		end
+	end
+	return copy
+end
+
+local function defaultView(profile: any): any
+	return {
+		money = profile.cash,
+		inventory = profile.inventory,
+		vehicles = copyList(profile.vehicles.owned),
+		selectedVehicle = profile.vehicles.selected,
+		starterDiscountUsed = profile.starterDiscountUsed == true,
+	}
+end
+
+function PlayerStore.new(options: Options)
+	assert(type(options) == "table", "PlayerStore.new needs options")
+	assert(type(options.profiles) == "table", "PlayerStore needs a ProfileService instance")
+	assert(type(options.economy) == "table", "PlayerStore needs an EconomyService instance")
+	local self = setmetatable({}, PlayerStore)
+	self._profiles = options.profiles
+	self._economy = options.economy
+	self._schema = options.schema or PlayerDataSchema
+	self._views = {}
+	self._workshopProfiles = {}
+	self._workshopVehicles = {}
+	return self
+end
+
+function PlayerStore:getVehicleProfiles(): { [string]: any }
+	return self._views
+end
+
+function PlayerStore:getWorkshopProfiles(): { [string]: any }
+	return self._workshopProfiles
+end
+
+local function buildWorkshopProfile(profile: any, view: any, records: { [string]: any }): any
+	local vehicles: { [string]: any } = {}
+	local stored = profile.parts.byVehicle
+	for _, vehicleId in ipairs(view.vehicles) do
+		local data: any = nil
+		if type(stored) == "table" then
+			data = (stored :: any)[vehicleId]
+		end
+		local fallbackInstalled = vehicleId == profile.vehicles.selected and type(profile.parts.installed) == "table"
+		local fallbackPaints = vehicleId == profile.vehicles.selected and type(profile.paints) == "table"
+		local record = {
+			modelId = vehicleId,
+			parts = if type(data) == "table" and type(data.parts) == "table"
+				then copyMap(data.parts)
+				elseif fallbackInstalled then copyMap(profile.parts.installed)
+				else {},
+			colors = if type(data) == "table" and type(data.colors) == "table"
+				then copyMap(data.colors)
+				elseif fallbackPaints then copyMap(profile.paints)
+				else {},
+		}
+		vehicles[vehicleId] = record
+		records[vehicleId] = record
+	end
+	return {
+		inventory = view.inventory,
+		vehicles = vehicles,
+	}
+end
+
+-- Laedt das Schema-Profil und baut beide Service-Sichten. Ist der Spieler
+-- bereits geladen, wird die vorhandene Sicht zurueckgegeben.
+function PlayerStore:load(userId: any): any
+	local key = toKey(userId)
+	local existing = self._views[key]
+	if existing ~= nil then
+		return existing
+	end
+	local profile = self._profiles:load(userId)
+	self._schema.migrate(profile)
+	if type(profile.cash) ~= "number" then
+		profile.cash = 0
+	end
+	local view = defaultView(profile)
+	view.schema = profile
+	self._views[key] = view
+	local records: { [string]: any } = {}
+	self._workshopProfiles[key] = buildWorkshopProfile(profile, view, records)
+	self._workshopVehicles[key] = records
+	self._economy:setBalance(userId, view.money)
+	return view
+end
+
+function PlayerStore:ensure(userId: any): any
+	return self:load(userId)
+end
+
+function PlayerStore:get(userId: any): any?
+	return self._views[toKey(userId)]
+end
+
+function PlayerStore:view(userId: any): any?
+	return self._views[toKey(userId)]
+end
+
+function PlayerStore:workshopVehicle(userId: any, vehicleId: string): any?
+	local records = self._workshopVehicles[toKey(userId)]
+	if records == nil then
+		return nil
+	end
+	return records[vehicleId]
+end
+
+function PlayerStore:owns(userId: any, vehicleId: string): boolean
+	local view = self._views[toKey(userId)]
+	if view == nil then
+		return false
+	end
+	for _, ownedId in ipairs(view.vehicles) do
+		if ownedId == vehicleId then
+			return true
+		end
+	end
+	return false
+end
+
+function PlayerStore:owned(userId: any): { string }
+	local view = self._views[toKey(userId)]
+	if view == nil then
+		return {}
+	end
+	local owned: { string } = {}
+	for _, vehicleId in ipairs(view.vehicles) do
+		table.insert(owned, vehicleId)
+	end
+	table.sort(owned)
+	return owned
+end
+
+function PlayerStore:selected(userId: any): string?
+	local view = self._views[toKey(userId)]
+	if view == nil then
+		return nil
+	end
+	return view.selectedVehicle
+end
+
+function PlayerStore:cash(userId: any): number
+	local view = self._views[toKey(userId)]
+	if view == nil then
+		return 0
+	end
+	return view.money
+end
+
+-- Eindeutiger Schluessel pro Spieler und Fahrzeug, weil mehrere Spieler
+-- dasselbe Modell besitzen koennen (FuelService/DynoService keyen nur nach ID).
+function PlayerStore:vehicleKey(userId: any, vehicleId: string): string
+	return string.format("%s:%s", toKey(userId), vehicleId)
+end
+
+function PlayerStore:refreshMoney(userId: any): number
+	local view = self._views[toKey(userId)]
+	if view == nil then
+		return 0
+	end
+	view.money = self._economy:getBalance(userId)
+	return view.money
+end
+
+function PlayerStore:commitMoney(userId: any): number
+	local view = self._views[toKey(userId)]
+	if view == nil then
+		return 0
+	end
+	view.money = math.max(0, math.floor(view.money))
+	view.schema.cash = view.money
+	self._economy:setBalance(userId, view.money)
+	return view.money
+end
+
+-- Schreibt beide Service-Sichten ins Schema zurueck.
+function PlayerStore:sync(userId: any): any?
+	local key = toKey(userId)
+	local view = self._views[key]
+	if view == nil then
+		return nil
+	end
+	local profile = view.schema
+	profile.cash = math.max(0, math.floor(view.money))
+	profile.inventory = view.inventory
+	profile.vehicles.owned = view.vehicles
+	profile.starterDiscountUsed = view.starterDiscountUsed == true
+	if type(view.selectedVehicle) == "string" and view.selectedVehicle ~= "" then
+		profile.vehicles.selected = view.selectedVehicle
+	elseif profile.vehicles.selected == nil or profile.vehicles.selected == "" then
+		profile.vehicles.selected = view.vehicles[1] or "bicycle"
+	end
+	local records = self._workshopVehicles[key]
+	if records == nil then
+		records = {}
+		self._workshopVehicles[key] = records
+	end
+	local workshop = self._workshopProfiles[key]
+	if workshop == nil then
+		workshop = { inventory = view.inventory, vehicles = {} }
+		self._workshopProfiles[key] = workshop
+	end
+	-- Neukaeufe erhalten einen Werkstatt-Record, damit Einbau/Lackierung
+	-- sofort moeglich sind.
+	for _, vehicleId in ipairs(view.vehicles) do
+		if records[vehicleId] == nil then
+			local record = { modelId = vehicleId, parts = {}, colors = {} }
+			records[vehicleId] = record
+			workshop.vehicles[vehicleId] = record
+		end
+	end
+	local byVehicle: { [string]: any } = {}
+	for vehicleId, record in pairs(records) do
+		byVehicle[vehicleId] = {
+			parts = copyMap(record.parts),
+			colors = copyMap(record.colors),
+		}
+	end
+	profile.parts.byVehicle = byVehicle
+	local selectedRecord = records[profile.vehicles.selected]
+	if selectedRecord ~= nil then
+		profile.parts.installed = selectedRecord.parts
+		profile.paints = selectedRecord.colors
+	end
+	self._economy:setBalance(userId, profile.cash)
+	return profile
+end
+
+function PlayerStore:save(userId: any): (boolean, string?)
+	local profile = self:sync(userId)
+	if profile == nil then
+		return false, "not loaded"
+	end
+	return self._profiles:save(userId)
+end
+
+function PlayerStore:saveAll(): (number, number)
+	local saved = 0
+	local failed = 0
+	for key in pairs(self._views) do
+		local ok = self:save(key)
+		if ok then
+			saved += 1
+		else
+			failed += 1
+		end
+	end
+	return saved, failed
+end
+
+function PlayerStore:release(userId: any): (boolean, string?)
+	local key = toKey(userId)
+	if self._views[key] == nil then
+		return true, nil
+	end
+	self:sync(userId)
+	local ok, err = self._profiles:release(userId)
+	if not ok then
+		return false, err
+	end
+	self._views[key] = nil
+	self._workshopProfiles[key] = nil
+	self._workshopVehicles[key] = nil
+	return true, nil
+end
+
+function PlayerStore:loadedCount(): number
+	local count = 0
+	for _key in pairs(self._views) do
+		count += 1
+	end
+	return count
+end
+
+return PlayerStore
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="27">
+          <Properties>
+            <string name="Name">ProfileAdapter</string>
+            <string name="Source"><![CDATA[--!strict
+-- ProfileAdapter: injizierbare Persistenz-Adapter fuer ProfileService.
+-- Produktion nutzt DataStore (GetAsync/SetAsync), Studio und Tests einen
+-- In-Memory-Adapter. Keine Roblox-Laufzeit in `memory()`, damit die
+-- Profilkette mit `lune run` testbar bleibt. Keine globalen Variablen.
+
+local ProfileAdapter = {}
+
+local function deepCopy(value: any): any
+	if type(value) ~= "table" then
+		return value
+	end
+	local copy: { [any]: any } = {}
+	for key, item in pairs(value) do
+		copy[deepCopy(key)] = deepCopy(item)
+	end
+	return copy
+end
+
+-- In-Memory-Adapter; `Set` liefert true wie ein erfolgreicher DataStore-Write.
+function ProfileAdapter.memory(initial: { [string]: any }?)
+	local store: { [string]: any } = {}
+	if initial ~= nil then
+		for key, value in pairs(initial) do
+			store[key] = deepCopy(value)
+		end
+	end
+	local adapter: any = {}
+	function adapter:Get(key: string): any?
+		local value = store[key]
+		if value == nil then
+			return nil
+		end
+		return deepCopy(value)
+	end
+	function adapter:Set(key: string, value: any): boolean
+		store[key] = deepCopy(value)
+		return true
+	end
+	function adapter:snapshot(): { [string]: any }
+		return store
+	end
+	return adapter
+end
+
+-- DataStore-Adapter; Fehler werden von ProfileService per pcall abgefangen.
+function ProfileAdapter.dataStore(dataStore: any, options: any?)
+	assert(type(dataStore) == "table" or type(dataStore) == "userdata", "dataStore required")
+	local opts = options or {}
+	local prefix: string = "player_"
+	if type(opts.keyPrefix) == "string" and opts.keyPrefix ~= "" then
+		prefix = opts.keyPrefix
+	end
+	local adapter: any = {}
+	function adapter:GetAsync(key: string): any?
+		return dataStore:GetAsync(prefix .. key)
+	end
+	function adapter:SetAsync(key: string, value: any): boolean
+		dataStore:SetAsync(prefix .. key, value)
+		return true
+	end
+	return adapter
+end
+
+return ProfileAdapter
+]]></string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="28">
           <Properties>
             <string name="Name">ProfileService</string>
             <string name="Source"><![CDATA[--!strict
@@ -4548,7 +5563,7 @@ return ProfileService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="25">
+        <Item class="ModuleScript" referent="29">
           <Properties>
             <string name="Name">ShopService</string>
             <string name="Source"><![CDATA[--!strict
@@ -4758,7 +5773,7 @@ return ShopService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="26">
+        <Item class="ModuleScript" referent="30">
           <Properties>
             <string name="Name">VehicleService</string>
             <string name="Source"><![CDATA[--!strict
@@ -5073,7 +6088,7 @@ return VehicleService
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="27">
+        <Item class="ModuleScript" referent="31">
           <Properties>
             <string name="Name">WorkshopService</string>
             <string name="Source"><![CDATA[--!strict
@@ -5311,11 +6326,11 @@ return WorkshopService
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="28">
+      <Item class="Folder" referent="32">
         <Properties>
           <string name="Name">vehicle</string>
         </Properties>
-        <Item class="ModuleScript" referent="29">
+        <Item class="ModuleScript" referent="33">
           <Properties>
             <string name="Name">BicycleSpawner</string>
             <string name="Source"><![CDATA[--!strict
@@ -5431,11 +6446,11 @@ return BicycleSpawner
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="30">
+      <Item class="Folder" referent="34">
         <Properties>
           <string name="Name">world</string>
         </Properties>
-        <Item class="ModuleScript" referent="31">
+        <Item class="ModuleScript" referent="35">
           <Properties>
             <string name="Name">AtmosphereBuilder</string>
             <string name="Source">--!strict
@@ -5505,7 +6520,7 @@ end
 return AtmosphereBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="32">
+        <Item class="ModuleScript" referent="36">
           <Properties>
             <string name="Name">BridgeBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -5607,7 +6622,7 @@ return BridgeBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="33">
+        <Item class="ModuleScript" referent="37">
           <Properties>
             <string name="Name">BuildingFactory</string>
             <string name="Source"><![CDATA[--!strict
@@ -5886,7 +6901,7 @@ return BuildingFactory
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="34">
+        <Item class="ModuleScript" referent="38">
           <Properties>
             <string name="Name">ChurchBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -5991,7 +7006,7 @@ return ChurchBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="35">
+        <Item class="ModuleScript" referent="39">
           <Properties>
             <string name="Name">ConiferFactory</string>
             <string name="Source">--!strict
@@ -6086,7 +7101,7 @@ end
 return ConiferFactory</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="36">
+        <Item class="ModuleScript" referent="40">
           <Properties>
             <string name="Name">DonerShopBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -6423,7 +7438,7 @@ return DonerShopBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="37">
+        <Item class="ModuleScript" referent="41">
           <Properties>
             <string name="Name">GarageFactory</string>
             <string name="Source">--!strict
@@ -6662,7 +7677,7 @@ end
 return GarageFactory</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="38">
+        <Item class="ModuleScript" referent="42">
           <Properties>
             <string name="Name">GarageWorldBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -6766,7 +7781,7 @@ return GarageWorldBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="39">
+        <Item class="ModuleScript" referent="43">
           <Properties>
             <string name="Name">GrassFieldBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -7084,7 +8099,7 @@ return GrassFieldBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="40">
+        <Item class="ModuleScript" referent="44">
           <Properties>
             <string name="Name">IntersectionBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -7248,7 +8263,7 @@ return IntersectionBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="41">
+        <Item class="ModuleScript" referent="45">
           <Properties>
             <string name="Name">PastureBuilder</string>
             <string name="Source">--!strict
@@ -7458,7 +8473,7 @@ end
 return PastureBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="42">
+        <Item class="ModuleScript" referent="46">
           <Properties>
             <string name="Name">RoadBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -7581,7 +8596,7 @@ return RoadBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="43">
+        <Item class="ModuleScript" referent="47">
           <Properties>
             <string name="Name">TerrainBuilder</string>
             <string name="Source">--!strict
@@ -7649,7 +8664,7 @@ end
 return TerrainBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="44">
+        <Item class="ModuleScript" referent="48">
           <Properties>
             <string name="Name">TerrainHeight</string>
             <string name="Source"><![CDATA[--!strict
@@ -7947,7 +8962,7 @@ return TerrainHeight
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="45">
+        <Item class="ModuleScript" referent="49">
           <Properties>
             <string name="Name">TrafficSignBuilder</string>
             <string name="Source">--!strict
@@ -8157,7 +9172,7 @@ end
 return TrafficSignBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="46">
+        <Item class="ModuleScript" referent="50">
           <Properties>
             <string name="Name">TrafficSignPlacer</string>
             <string name="Source"><![CDATA[--!strict
@@ -8437,7 +9452,7 @@ return TrafficSignPlacer
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="47">
+        <Item class="ModuleScript" referent="51">
           <Properties>
             <string name="Name">ValleyWorld</string>
             <string name="Source"><![CDATA[--!strict
@@ -8582,7 +9597,7 @@ return ValleyWorld
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="48">
+        <Item class="ModuleScript" referent="52">
           <Properties>
             <string name="Name">VegetationBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -8860,7 +9875,7 @@ return VegetationBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="49">
+        <Item class="ModuleScript" referent="53">
           <Properties>
             <string name="Name">VillageBuilder</string>
             <string name="Source"><![CDATA[--!strict
@@ -8956,7 +9971,7 @@ return VillageBuilder
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="50">
+        <Item class="ModuleScript" referent="54">
           <Properties>
             <string name="Name">WaterBuilder</string>
             <string name="Source">--!strict
@@ -9077,7 +10092,7 @@ end
 return WaterBuilder</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="51">
+        <Item class="ModuleScript" referent="55">
           <Properties>
             <string name="Name">WorldLayout</string>
             <string name="Source"><![CDATA[--!strict
@@ -9424,7 +10439,7 @@ return WorldLayout
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="52">
+        <Item class="ModuleScript" referent="56">
           <Properties>
             <string name="Name">WorldZones</string>
             <string name="Source"><![CDATA[--!strict
@@ -9991,11 +11006,11 @@ return WorldZones
 ]]></string>
           </Properties>
         </Item>
-        <Item class="Folder" referent="53">
+        <Item class="Folder" referent="57">
           <Properties>
             <string name="Name">data</string>
           </Properties>
-          <Item class="ModuleScript" referent="54">
+          <Item class="ModuleScript" referent="58">
             <Properties>
               <string name="Name">BuildingCatalog</string>
               <string name="Source">--!strict
@@ -10244,11 +11259,11 @@ return BuildingCatalog</string>
         </Item>
       </Item>
     </Item>
-    <Item class="Folder" referent="55">
+    <Item class="Folder" referent="59">
       <Properties>
         <string name="Name">shared</string>
       </Properties>
-      <Item class="ModuleScript" referent="56">
+      <Item class="ModuleScript" referent="60">
         <Properties>
           <string name="Name">GameConfig</string>
           <string name="Source"><![CDATA[--!strict
@@ -10271,11 +11286,11 @@ return table.freeze(GameConfig)
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="57">
+      <Item class="Folder" referent="61">
         <Properties>
           <string name="Name">data</string>
         </Properties>
-        <Item class="ModuleScript" referent="58">
+        <Item class="ModuleScript" referent="62">
           <Properties>
             <string name="Name">PartsCatalog</string>
             <string name="Source"><![CDATA[--!strict
@@ -10723,7 +11738,7 @@ return PartsCatalog
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="59">
+        <Item class="ModuleScript" referent="63">
           <Properties>
             <string name="Name">PlayerDataSchema</string>
             <string name="Source"><![CDATA[--!strict
@@ -10898,7 +11913,7 @@ return PlayerDataSchema
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="60">
+        <Item class="ModuleScript" referent="64">
           <Properties>
             <string name="Name">VehicleCatalog</string>
             <string name="Source"><![CDATA[--!strict
@@ -11152,11 +12167,11 @@ return VehicleCatalog
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="61">
+      <Item class="Folder" referent="65">
         <Properties>
           <string name="Name">net</string>
         </Properties>
-        <Item class="ModuleScript" referent="62">
+        <Item class="ModuleScript" referent="66">
           <Properties>
             <string name="Name">RateLimiter</string>
             <string name="Source"><![CDATA[-- RateLimiter: pro Spieler und Aktion begrenzte Anfragefenster
@@ -11355,7 +12370,7 @@ return RateLimiter
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="63">
+        <Item class="ModuleScript" referent="67">
           <Properties>
             <string name="Name">RemoteProtocol</string>
             <string name="Source"><![CDATA[-- RemoteProtocol: versionierte Remote-Namen und Payload-Schemas.
@@ -11405,6 +12420,45 @@ local PAYLOAD_SCHEMAS: { [string]: { [string]: { kind: string, required: boolean
 	ping = {},
 	echo = {
 		message = { kind = "string", required = true },
+	},
+	EconomyGet = {},
+	EconomyTransfer = {
+		targetUserId = { kind = "number", required = false },
+	},
+	VehicleSelect = {
+		action = { kind = "string", required = false },
+	},
+	VehicleBuy = {
+		vehicleId = { kind = "string", required = true },
+	},
+	MissionProgress = {
+		missionKey = { kind = "string", required = false },
+		claim = { kind = "boolean", required = false },
+	},
+	GarageEnter = {},
+	WorkshopInstall = {
+		vehicleId = { kind = "string", required = true },
+		partId = { kind = "string", required = true },
+	},
+	WorkshopPaint = {
+		vehicleId = { kind = "string", required = true },
+		surface = { kind = "string", required = true },
+		color = { kind = "string", required = true },
+	},
+	ShopCatalog = {
+		modelFilter = { kind = "string", required = false },
+	},
+	ShopBuy = {
+		partId = { kind = "string", required = true },
+		source = { kind = "string", required = false },
+	},
+	DynoRun = {
+		vehicleId = { kind = "string", required = true },
+	},
+	FuelRefill = {
+		action = { kind = "string", required = false },
+		vehicleId = { kind = "string", required = false },
+		liters = { kind = "number", required = false },
 	},
 	DeliveryOrder = {
 		vehicleType = { kind = "string", required = true },
@@ -11490,11 +12544,11 @@ return RemoteProtocol
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="64">
+      <Item class="Folder" referent="68">
         <Properties>
           <string name="Name">vehicle</string>
         </Properties>
-        <Item class="ModuleScript" referent="65">
+        <Item class="ModuleScript" referent="69">
           <Properties>
             <string name="Name">StatsCalculator</string>
             <string name="Source"><![CDATA[--!strict
@@ -11840,15 +12894,15 @@ return StatsCalculator
       </Item>
     </Item>
   </Item>
-  <Item class="StarterPlayer" referent="66">
+  <Item class="StarterPlayer" referent="70">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="67">
+    <Item class="StarterPlayerScripts" referent="71">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="LocalScript" referent="68">
+      <Item class="LocalScript" referent="72">
         <Properties>
           <string name="Name">bootstrap</string>
           <string name="Source"><![CDATA[--!strict
@@ -12048,11 +13102,11 @@ init()
 ]]></string>
         </Properties>
       </Item>
-      <Item class="Folder" referent="69">
+      <Item class="Folder" referent="73">
         <Properties>
           <string name="Name">controllers</string>
         </Properties>
-        <Item class="ModuleScript" referent="70">
+        <Item class="ModuleScript" referent="74">
           <Properties>
             <string name="Name">BicycleController</string>
             <string name="Source"><![CDATA[--!strict
@@ -12515,7 +13569,7 @@ return BicycleController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="71">
+        <Item class="ModuleScript" referent="75">
           <Properties>
             <string name="Name">GrassController</string>
             <string name="Source"><![CDATA[--!strict
@@ -12863,7 +13917,7 @@ return GrassController
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="72">
+        <Item class="ModuleScript" referent="76">
           <Properties>
             <string name="Name">MopedController</string>
             <string name="Source"><![CDATA[--!strict
@@ -13318,11 +14372,11 @@ return MopedController
           </Properties>
         </Item>
       </Item>
-      <Item class="Folder" referent="73">
+      <Item class="Folder" referent="77">
         <Properties>
           <string name="Name">ui</string>
         </Properties>
-        <Item class="ModuleScript" referent="74">
+        <Item class="ModuleScript" referent="78">
           <Properties>
             <string name="Name">DeliveryPrompt</string>
             <string name="Source">--!strict
@@ -13696,7 +14750,7 @@ end
 return DeliveryPrompt</string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="75">
+        <Item class="ModuleScript" referent="79">
           <Properties>
             <string name="Name">ShopTerminal</string>
             <string name="Source"><![CDATA[--!strict

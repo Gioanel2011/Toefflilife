@@ -432,3 +432,26 @@ Legende: `[x]` in diesem Lauf beobachtet bestanden, `[!]` beobachtet fehlgeschla
 
 **Fazit:** Der Minimal-Start, der Dönerloop und die serverseitige Garagenzuweisung funktionieren. Die 15-Spieler-Abnahme ist in dieser Umgebung nicht durchführbar und würde wegen der fehlenden generischen Handler und der `invalid_player`-Sperre für simulierte Clients auch mit 15 Clients scheitern. **Task 32 bleibt offen; keine Erfolgsmarkierung.**
 
+### 15.6 Code-Stand 2026-11-10 (noch keine erneute Abnahme)
+
+Dieser Abschnitt dokumentiert ausschließlich den Code-Stand. Die Ergebnisse aus 15.3/15.4 bleiben unverändert gültig, bis ein neuer Lauf durchgeführt wurde.
+
+| Blocker | Status | Änderung |
+|---|---|---|
+| B32-02 | **im Code behoben (nur Studio)** | `src/server/net/PlayerIds.luau` bildet negative Studio-UserIds (`-1..-8`) ausschließlich bei `RunService:IsStudio()` auf `9_000_000_001..9_000_000_008` ab. `RequestRouter.invalidPlayer` bleibt streng; Live-Server unverändert. Bootstrap nutzt dieselbe kanonische ID für Router, Economy und Garage. |
+| B32-04 | **im Code behoben** | `VehicleSelect` liest `cash` aus derselben `EconomyService`-Instanz wie `EconomyGet`; `PlayerDataSchema.createDefault().cash` wird nicht mehr verwendet. |
+| B32-03 | **im Code behoben** | `src/server/services/ProfileAdapter.luau` (Memory/DataStore), `src/server/services/PlayerStore.luau` (Schema-Brücke, Cash-Sync, Rabatt-/Teile-Persistenz) und `src/server/services/GameplayHandlers.luau` registrieren 12 Aktionen: `VehicleSelect`, `EconomyGet`, `VehicleBuy`, `MissionProgress`, `GarageEnter`, `WorkshopInstall`, `WorkshopPaint`, `ShopCatalog`, `ShopBuy`, `DynoRun`, `FuelRefill`, `EconomyTransfer`. Keine dieser Aktionen antwortet mehr mit `unknown_action`. |
+| B32-01 | **Umgebungsgrenze** | Studio simuliert maximal 8 Clients. |
+| B32-05 | **Umgebungsgrenze** | CLI-`StartServer` scheitert lokal; für 15 echte Clients ist eine veröffentlichte Test-Place vorgesehen. |
+
+**Validierung 2026-11-10 (Code, ohne Studio-Lauf):**
+- `selene src tests`: 0 Fehler, 0 Warnungen.
+- `lune run` für alle 27 Specs: bestanden, davon `tests/GenericHandlers.spec.luau` mit 64 Checks (Registrierung, Cash-Konsistenz, Rabatt, Doppelkauf, Fremdkonto, Shop, Werkstatt, Garage, Mission, Tank-/Dyno-Servicecodes, Persistenz nach Rejoin).
+- `rojo build default.project.json -o build/ToeffliTal.rbxlx`: ok.
+
+**Weiterhin offen (nicht durch Task 35 lösbar):**
+- Tankstelle und Dyno-Zustand sind nicht in der Welt verdrahtet; `FuelRefill`/`DynoRun` antworten ehrlich mit `NotAtGasStation`/`NotOnDyno` statt `unknown_action`.
+- Missionszustand wird noch nicht persistiert (M-04-Rejoin-Auszahlung bleibt zu prüfen).
+- Die Client-UI ist für die neuen Aktionen noch nicht verdrahtet: `ShopTerminal` wird im Bootstrap nicht instanziiert und nutzt zudem `GetCatalog`/`OrderPart` statt `ShopCatalog`/`ShopBuy`; Werkstatt-, Garagen- und Dyno-Aufrufe fehlen clientseitig. Die serverseitigen Remotes sind vorhanden und per Test-Harness aufrufbar.
+- 8-Client-Studio-Vorprüfung für Task 34 und die vollständige 15-Spieler-Abnahme (Task 32).
+

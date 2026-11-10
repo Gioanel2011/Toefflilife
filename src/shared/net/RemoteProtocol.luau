@@ -46,6 +46,45 @@ local PAYLOAD_SCHEMAS: { [string]: { [string]: { kind: string, required: boolean
 	echo = {
 		message = { kind = "string", required = true },
 	},
+	EconomyGet = {},
+	EconomyTransfer = {
+		targetUserId = { kind = "number", required = false },
+	},
+	VehicleSelect = {
+		action = { kind = "string", required = false },
+	},
+	VehicleBuy = {
+		vehicleId = { kind = "string", required = true },
+	},
+	MissionProgress = {
+		missionKey = { kind = "string", required = false },
+		claim = { kind = "boolean", required = false },
+	},
+	GarageEnter = {},
+	WorkshopInstall = {
+		vehicleId = { kind = "string", required = true },
+		partId = { kind = "string", required = true },
+	},
+	WorkshopPaint = {
+		vehicleId = { kind = "string", required = true },
+		surface = { kind = "string", required = true },
+		color = { kind = "string", required = true },
+	},
+	ShopCatalog = {
+		modelFilter = { kind = "string", required = false },
+	},
+	ShopBuy = {
+		partId = { kind = "string", required = true },
+		source = { kind = "string", required = false },
+	},
+	DynoRun = {
+		vehicleId = { kind = "string", required = true },
+	},
+	FuelRefill = {
+		action = { kind = "string", required = false },
+		vehicleId = { kind = "string", required = false },
+		liters = { kind = "number", required = false },
+	},
 	DeliveryOrder = {
 		vehicleType = { kind = "string", required = true },
 	},

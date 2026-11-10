@@ -1,5 +1,5 @@
 # Projektgedächtnis – Töffli Tal
-Stand: 2026-11-09
+Stand: 2026-11-10
 
 ## Projekt
 „Töffli Tal“: Schweizer Roblox-Open-World für max. 15 Spieler; Server autoritativ, Rojo/Rokit/Selene/StyLua/Lune.
@@ -17,6 +17,8 @@ Stand: 2026-11-09
 - Erledigt Task 33: Minimal-Loop verkabelt (generischer Router + `VehicleSelect`/`EconomyGet`, `DeliveryService` Array-Format + `Vector3`=`"vector"`, `AtmosphereBuilder` `ColorShift_Top/_Bottom`); Selene 0 Fehler, DeliveryService.spec grün, Rojo-Build ok.
 - Erledigt Task 06: Studio-Lauf 3 mit frischer Rojo-Place; MS-01…MS-11 11/11 bestanden (Details `docs/PLAYTEST.md` 13.8). Resthinweis: projektexterne `cloud_…`-Meldung.
 - Erledigt Task 31: Abnahmeliste in `docs/PLAYTEST.md` Abschnitt 14 (30 Checks) mit eindeutigem Erwartungsergebnis und Feld für tatsächliches Ergebnis pro kritischem Pfad; keine erfundenen Ergebnisse.
+- Erledigt Task 34: `PlayerIds` (kanonische Studio-IDs, Offset 9_000_000_000, nur `RunService:IsStudio()`) + Bootstrap-Anbindung für Router/Economy/Garage + `VehicleSelect`-Guthaben aus `EconomyService` (B32-02, B32-04 im Code behoben); Selene 0 Fehler, `PlayerIds.spec` 18/18, `RequestRouter.spec` grün, Rojo-Build ok. Studio-8-Client-Lauf offen.
+- Erledigt Task 35: `ProfileAdapter` (Memory/DataStore), `PlayerStore` (Schema-Brücke, Cash-Sync, Rabatt-/Teile-Persistenz) und `GameplayHandlers` (12 registrierte Aktionen) beheben B32-03 im Code; Selene 0 Fehler, 27/27 Lune-Specs (`GenericHandlers.spec` 64 Checks), Rojo-Build ok. Tankstelle/Dyno-Zustand und Missionspersistenz bleiben offen; 15-Client-Abnahme steht aus.
 
 ## Konventionen
 - Serverautoritativ; keine Client-Preise. Keine globalen Variablen.
@@ -25,4 +27,4 @@ Stand: 2026-11-09
 - Routine/UI: Beam 1.0 Build. Eskalation nur nach 2 Fehlversuchen (MiMo-V2.6 Pro/Kimi K3.1 Pro).
 
 ## Queue
-- Offen: Task 32. Naechster: Task 32 (DeepSeek V4.1 Flash, Build; Eskalation MiMo-V2.6 Pro/Kimi K3.1 Pro).
+- Offen: Task 32. Naechster: Task 32 mit 15 echten Clients (DeepSeek V4.1 Flash, Build; Eskalation MiMo-V2.6 Pro/Kimi K3.1 Pro). Vorher optional: Tankstelle/Dyno-Weltzustand und Missionspersistenz nachziehen.

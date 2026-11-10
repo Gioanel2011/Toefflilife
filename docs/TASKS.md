@@ -488,3 +488,31 @@
   """
 - **Validierung:** Alle Pflichtfelder der Checkliste sind mit tatsächlichen Ergebnissen ausgefüllt; Start, Fahrt, Lieferung und 15 getrennte Garagen funktionieren ohne roten Output.
 - **Commit-Empfehlung:** docs(qa): record fifteen player acceptance
+
+### [x] Task 34: Studio-Mehrclient und konsistenten Guthaben-Snapshot herstellen (B32-02, B32-04)
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/net/PlayerIds.luau, src/server/bootstrap.server.luau, tests/PlayerIds.spec.luau, tests/RequestRouter.spec.luau, docs/PLAYTEST.md
+- **Context-Dateien:** src/server/net/RequestRouter.luau, src/server/services/EconomyService.luau, src/shared/data/PlayerDataSchema.luau
+- **Agent-Persona:** Sicherheitsorientierter Roblox-Netzwerkintegrator fuer Studio-Mehrclient und Guthabenkonsistenz.
+- **Ausfuehrungs-Prompt:**
+  """
+  Bilde negative Studio-UserIds ausschliesslich bei `RunService:IsStudio()` auf einen reservierten positiven Bereich ab; Live-Server bleiben unveraendert streng. Alle Services und der Router erhalten dieselbe kanonische ID. `VehicleSelect` liefert den echten `EconomyService`-Stand statt `PlayerDataSchema.createDefault().cash`. Router-Validierung nicht aufweichen; keine Clientwerte, keine globalen Variablen.
+  """
+- **Validierung:** `selene` auf den Targets, `lune run` fuer `PlayerIds.spec` und `RequestRouter.spec`, `rojo build` fehlerfrei; Studio-8-Client-Lauf mit `EconomyGet`/`VehicleSelect`/`DeliveryOrder` ohne `invalid_player` und identischem `cash`.
+- **Commit-Empfehlung:** fix(net): canonicalize studio player ids and cash snapshot
+- **Ergebnis 2026-11-10:** `PlayerIds.canonical` (Offset 9_000_000_000, nur Studio) + Bootstrap-Anbindung + `VehicleSelect`-Guthaben umgesetzt. `PlayerIds.spec` 18/18, `RequestRouter.spec` gruen (inkl. neuer Negativprobe `UserId=-1`), Selene 0 Fehler, Rojo-Build ok. Studio-8-Client-Lauf offen.
+
+### [x] Task 35: Generische Gameplay-Handler mit Profil-Store verdrahten (B32-03)
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** src/server/services/ProfileAdapter.luau, src/server/services/PlayerStore.luau, src/server/services/GameplayHandlers.luau, src/server/bootstrap.server.luau, src/shared/net/RemoteProtocol.luau, tests/GenericHandlers.spec.luau
+- **Context-Dateien:** src/server/services/ProfileService.luau, src/server/services/VehicleService.luau, src/server/services/ShopService.luau, src/server/services/WorkshopService.luau, src/server/services/GarageService.luau, src/server/services/DynoService.luau, src/server/services/FuelService.luau, src/server/services/MissionService.luau, src/server/services/EconomyService.luau, src/shared/data/PlayerDataSchema.luau
+- **Agent-Persona:** Server-Integrator fuer persistente, clientunabhaengige Gameplay-Handler.
+- **Ausfuehrungs-Prompt:**
+  """
+  Instanziiere ProfileService mit einem DataStore-Adapter (Produktion) und einem In-Memory-Adapter (Studio/Test). Baue `PlayerStore` als Bruecke zwischen `PlayerDataSchema` (Persistenz) und der Service-Sicht (`money`, `vehicles`-Map, `selectedVehicle`); synchronisiere `cash` beim Laden und Speichern mit `EconomyService`. Registriere `VehicleBuy`, `ShopCatalog`, `ShopBuy`, `WorkshopInstall`, `WorkshopPaint`, `GarageEnter`, `DynoRun`, `FuelRefill`, `MissionProgress`, `EconomyTransfer` serverseitig mit Rate-Limit und Payload-Schemas. Preise, Distanzen, Besitz, Werkstattstatus und Rabatte bleiben ausschliesslich serverseitig.
+  """
+- **Validierung:** `selene` auf den Targets, alle `lune`-Specs inkl. `GenericHandlers.spec`, `rojo build` fehlerfrei; Play Solo mit echtem Konto: keines der zehn Remotes liefert `unknown_action`, `VehicleSelect.cash == EconomyGet.cash`.
+- **Commit-Empfehlung:** feat(server): register generic gameplay handlers and unify cash
+- **Ergebnis 2026-11-10:** `ProfileAdapter` (Memory/DataStore), `PlayerStore` (Schema-Sicht, Cash-Sync, Rabatt- und Teile-Persistenz) und `GameplayHandlers` (12 Aktionen inkl. `VehicleSelect`/`EconomyGet`) umgesetzt; Bootstrap initialisiert echte Service-Instanzen, DataStore nur ausserhalb Studio. Validierung: Selene 0 Fehler, 27/27 Lune-Specs (davon `GenericHandlers.spec` 64 Checks), Rojo-Build ok. Abgedeckt: kein `unknown_action`, Cash-Konsistenz, Rabatt/Doppelkauf/Fremdkonto, Shop, Werkstatt, Garage, Mission, Tank-/Dyno-Servicecodes, Persistenz nach Rejoin. Play-Solo-/15-Client-Lauf offen; Tankstelle und Dyno-Zustand fehlen weiterhin als Weltintegration.

@@ -5,18 +5,26 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
+local DataStoreService = game:GetService("DataStoreService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local ServicesFolder = ServerScriptService:WaitForChild("Services")
 
 local GameConfig = require(Shared:WaitForChild("GameConfig"))
 local PlayerDataSchema = require(Shared:WaitForChild("data"):WaitForChild("PlayerDataSchema"))
+local VehicleCatalog = require(Shared:WaitForChild("data"):WaitForChild("VehicleCatalog"))
+local PartsCatalog = require(Shared:WaitForChild("data"):WaitForChild("PartsCatalog"))
 local RemoteProtocol = require(Shared:WaitForChild("net"):WaitForChild("RemoteProtocol"))
 
 local ServerRoot = script.Parent
 local ProfileService = require(ServerRoot:WaitForChild("services"):WaitForChild("ProfileService"))
+local ProfileAdapter = require(ServerRoot:WaitForChild("services"):WaitForChild("ProfileAdapter"))
+local PlayerStore = require(ServerRoot:WaitForChild("services"):WaitForChild("PlayerStore"))
+local GameplayHandlers = require(ServerRoot:WaitForChild("services"):WaitForChild("GameplayHandlers"))
 local RequestRouter = require(ServerRoot:WaitForChild("net"):WaitForChild("RequestRouter"))
+local PlayerIds = require(ServerRoot:WaitForChild("net"):WaitForChild("PlayerIds"))
 local EconomyService = require(ServerRoot:WaitForChild("services"):WaitForChild("EconomyService"))
 local VehicleService = require(ServerRoot:WaitForChild("services"):WaitForChild("VehicleService"))
 local MissionService = require(ServerRoot:WaitForChild("services"):WaitForChild("MissionService"))
@@ -37,9 +45,33 @@ local _MaxPlayers: number = GameConfig.MAX_PLAYERS :: any
 local remotes: { [string]: Instance } = {}
 local connections: { RBXScriptConnection } = {}
 local shuttingDown = false
--- Echte Economy-Instanz (nicht das Modul), damit Lieferungen serverseitig
--- genau einmal gutgeschrieben werden.
+-- Studio-Mehrclient vergibt negative UserIds (-1..-8). Nur in Studio werden
+-- sie auf einen reservierten positiven Bereich abgebildet; der Live-Server
+-- bleibt bei der strengen Pruefung. Alle Services und der Router erhalten
+-- dieselbe kanonische ID.
+local allowSimulatedPlayers = RunService:IsStudio()
+-- Echte Service-Instanzen (nicht die Module), damit Profile, Guthaben und
+-- Spielerzustand serverseitig zusammenlaufen.
 local economyService: any = nil
+local profileService: any = nil
+local playerStore: any = nil
+local vehicleServiceInst: any = nil
+local fuelServiceInst: any = nil
+local dynoServiceInst: any = nil
+local transactionCounter = 0
+
+local function canonicalUserId(player: Player): number?
+	return PlayerIds.canonical(player.UserId, allowSimulatedPlayers)
+end
+
+-- Fuer Services, die nur die UserId benoetigen (z. B. GarageService).
+local function servicePlayer(player: Player): any
+	local userId = canonicalUserId(player)
+	if userId == nil then
+		return player
+	end
+	return { UserId = userId }
+end
 
 local function getModuleFn(module: any, name: string): any
 	local fn = (module :: any)[name]
@@ -123,76 +155,220 @@ local function setupRemotes(): Folder
 	return netFolder
 end
 
+-- Produktion: DataStore. Studio/Test: In-Memory, damit Play Solo ohne
+-- API-Zugriff deterministisch bleibt. Fehler fallen auf In-Memory zurueck.
+local function buildProfileAdapter(): any
+	if RunService:IsStudio() then
+		return ProfileAdapter.memory()
+	end
+	local ok, store = pcall(function()
+		return DataStoreService:GetDataStore("ToeffliTalProfiles_v1")
+	end)
+	if not ok or store == nil then
+		warn("[ToeffliTal][Server] DataStore nicht verfuegbar; Profile bleiben session-lokal")
+		return ProfileAdapter.memory()
+	end
+	return ProfileAdapter.dataStore(store)
+end
+
+local function playerPosition(userId: number): Vector3?
+	local player = Players:GetPlayerByUserId(userId)
+	if player == nil or player.Character == nil then
+		return nil
+	end
+	local root = player.Character:FindFirstChild("HumanoidRootPart")
+	if root ~= nil and root:IsA("BasePart") then
+		return root.Position
+	end
+	return nil
+end
+
+local function garageAnchorPosition(garageId: string): Vector3?
+	for _, anchor in WorldLayout.getGarageAnchors() do
+		if anchor.id == garageId then
+			local point = anchor.position
+			return Vector3.new(point.x, point.y, point.z)
+		end
+	end
+	return nil
+end
+
+-- Echte serverseitige Naehekontrolle fuer die eigene Garage. Kein Clientwert.
+local function isNearOwnGarage(userId: any): boolean
+	local numericId = tonumber(userId)
+	if numericId == nil then
+		return false
+	end
+	local garageId = GarageService.getGarage(numericId)
+	if garageId == nil then
+		return false
+	end
+	local anchor = garageAnchorPosition(garageId)
+	local position = playerPosition(numericId)
+	if anchor == nil or position == nil then
+		return false
+	end
+	return (position - anchor).Magnitude <= 24
+end
+
+local function isNearStore(_userId: any): boolean
+	-- Es gibt noch kein gebautes Toeffli-Ladengebaeude; Bestellungen laufen
+	-- deshalb ausschliesslich ueber das Laptop-Terminal. Kein Clientwert.
+	return false
+end
+
+local function isOwnerOfVehicleKey(userId: any, vehicleKey: any): boolean
+	if type(vehicleKey) ~= "string" then
+		return false
+	end
+	local prefix = tostring(userId) .. ":"
+	if string.sub(vehicleKey, 1, #prefix) ~= prefix then
+		return false
+	end
+	local vehicleId = string.sub(vehicleKey, #prefix + 1)
+	if playerStore == nil then
+		return false
+	end
+	return playerStore:owns(userId, vehicleId)
+end
+
+local function nextTransactionId(userId: number, kind: string): string
+	transactionCounter += 1
+	return string.format("%s:%s:%d:%d", kind, tostring(userId), os.time(), transactionCounter)
+end
+
+local function registerVehicle(userId: number, vehicleId: string): ()
+	if playerStore == nil or fuelServiceInst == nil or dynoServiceInst == nil then
+		return
+	end
+	local definition = VehicleCatalog.get(vehicleId)
+	if definition == nil then
+		return
+	end
+	local vehicleKey = playerStore:vehicleKey(userId, vehicleId)
+	fuelServiceInst:RegisterVehicle(vehicleKey, userId, {
+		modelId = vehicleId,
+		kind = definition.Class,
+		hasEngine = definition.Fuel.HasEngine,
+		tankVolume = definition.Fuel.TankLiters,
+	})
+	local record = playerStore:workshopVehicle(userId, vehicleId)
+	local parts: any = {}
+	if record ~= nil then
+		parts = record.parts
+	end
+	dynoServiceInst:RegisterVehicle(vehicleKey, userId, {
+		id = vehicleId,
+		modelId = vehicleId,
+		kind = definition.Class,
+		hasEngine = definition.Fuel.HasEngine,
+		physics = definition.Physics,
+	}, parts)
+end
+
+local function registerOwnedVehicles(userId: number): ()
+	for _, vehicleId in ipairs(playerStore:owned(userId)) do
+		registerVehicle(userId, vehicleId)
+	end
+end
+
 -- 3-5. Services in Abhängigkeitsreihenfolge initialisieren und Router verdrahten.
 local function setupServices(netFolder: Folder): ()
-	callOptional(ProfileService, "init")
-	callOptional(EconomyService, "init", { profiles = ProfileService })
-	callOptional(VehicleService, "init", { profiles = ProfileService, economy = EconomyService })
-	callOptional(MissionService, "init", { profiles = ProfileService, economy = EconomyService })
+	profileService = ProfileService.new(buildProfileAdapter(), PlayerDataSchema)
+	economyService = EconomyService.new()
+
 	local garageAnchors = collectGarageAnchorIds()
 	assert(
 		#garageAnchors == 15,
 		string.format("GarageService erwartet 15 Weltanker, gefunden: %d", #garageAnchors)
 	)
-	callOptional(GarageService, "init", { profiles = ProfileService, anchors = garageAnchors })
-	callOptional(WorkshopService, "init", {
-		profiles = ProfileService,
-		economy = EconomyService,
-		garage = GarageService,
-	})
-	callOptional(ShopService, "init", { profiles = ProfileService, economy = EconomyService })
-	callOptional(DynoService, "init", { profiles = ProfileService, garage = GarageService })
-	callOptional(FuelService, "init", { profiles = ProfileService, economy = EconomyService })
+	GarageService.init({ anchors = garageAnchors })
 
-	-- Echte Economy-Instanz für serverseitige Gutschriften.
-	economyService = EconomyService.new()
+	playerStore = PlayerStore.new({ profiles = profileService, economy = economyService })
+
+	-- Preise kommen ausschliesslich aus den Serverkatalogen.
+	vehicleServiceInst = VehicleService.new()
+	local shopCatalog: { [string]: any } = {}
+	local workshopParts: { [string]: any } = {}
+	for _, part in PartsCatalog.Parts do
+		shopCatalog[part.id] = {
+			id = part.id,
+			price = part.price,
+			slot = part.slot,
+			models = part.compatibleModels,
+		}
+		workshopParts[part.id] = { slot = part.slot, models = part.compatibleModels }
+	end
+	local shopServiceInst = ShopService.new({
+		catalog = shopCatalog,
+		profiles = playerStore:getVehicleProfiles(),
+		isNearStore = isNearStore,
+	})
+	local workshopServiceInst = WorkshopService.new({
+		profiles = playerStore:getWorkshopProfiles(),
+		parts = workshopParts,
+		isWorkshopActive = isNearOwnGarage,
+	})
+	fuelServiceInst = FuelService.new({
+		isOwner = isOwnerOfVehicleKey,
+		isAtGasStation = function(_userId: any, _vehicleKey: any): boolean
+			-- Es gibt noch keine Tankstelle in der Welt; ehrliche Ablehnung.
+			return false
+		end,
+		debit = function(userId: any, amount: number, transactionId: string?): (boolean, string?)
+			-- EconomyService rechnet in ganzen CHF; Tankkosten sind gerundet.
+			local tx = transactionId
+			if type(tx) ~= "string" or tx == "" then
+				transactionCounter += 1
+				tx = string.format("fuel:%s:%d:%d", tostring(userId), os.time(), transactionCounter)
+			end
+			local ok, result = economyService:debit(userId, math.ceil(amount), tx :: string)
+			if not ok then
+				return false, tostring(result)
+			end
+			return true, nil
+		end,
+	})
+	dynoServiceInst = DynoService.new({ isOwner = isOwnerOfVehicleKey })
+	local missionServiceInst = MissionService.new()
 
 	-- Der Router erwartet eine tabellenbasierte Spielerzuordnung; echte Player
-	-- sind userdata. Darum läuft pro UserId genau eine Aufzeichnung mit den
-	-- serverseitig bekannten Werten (UserId, aktueller Character).
+	-- sind userdata. Darum läuft pro kanonischer UserId genau eine
+	-- Aufzeichnung mit den serverseitig bekannten Werten (UserId, Character).
 	local requestPlayers: { [number]: any } = {}
 	local function requestPlayer(player: Player): any
-		local record = requestPlayers[player.UserId]
+		local userId = canonicalUserId(player)
+		if userId == nil then
+			-- Ungueltige IDs bleiben unveraendert; der Router weist sie mit
+			-- `invalid_player` ab, statt sie stillschweigend abzubilden.
+			return { UserId = player.UserId, Character = player.Character }
+		end
+		local record = requestPlayers[userId]
 		if record == nil then
-			record = { UserId = player.UserId, Character = player.Character }
-			requestPlayers[player.UserId] = record
+			record = { UserId = userId, Character = player.Character }
+			requestPlayers[userId] = record
 		else
 			record.Character = player.Character
 		end
 		return record
 	end
 
-	-- Generischer Router als echte Instanz (nicht `RequestRouter.init`, das es
-	-- nicht gibt). Nicht registrierte Aktionen antworten sofort mit
-	-- `unknown_action`, statt den Client hängen zu lassen.
+	-- Generischer Router als echte Instanz. Nicht registrierte Aktionen
+	-- antworten sofort mit `unknown_action`, statt den Client hängen zu lassen.
 	local genericRouter = RequestRouter.new()
-
-	-- Fahrzeugauswahl: nur serverseitig bekannte Standardwerte aus dem
-	-- versionierten Spielerschema; keine Clientwerte.
-	local function vehicleSelectHandler(_player: any, payload: any): any
-		local defaults = PlayerDataSchema.createDefault()
-		local action = payload.action
-		if action == nil or action == "getActive" then
-			return {
-				ok = true,
-				selected = defaults.vehicles.selected,
-				owned = defaults.vehicles.owned,
-				cash = defaults.cash,
-			}
-		end
-		return { ok = false, code = "unsupportedAction" }
-	end
-	genericRouter:register("VehicleSelect", vehicleSelectHandler)
-
-	-- Guthabenabfrage: ausschliesslich das eigene Konto.
-	local function economyGetHandler(player: any, _payload: any): any
-		local balance = 0
-		if economyService ~= nil then
-			balance = economyService:getBalance(player.UserId)
-		end
-		return { ok = true, cash = balance }
-	end
-	genericRouter:register("EconomyGet", economyGetHandler)
+	GameplayHandlers.register(genericRouter, {
+		playerStore = playerStore,
+		vehicleService = vehicleServiceInst,
+		shopService = shopServiceInst,
+		workshopService = workshopServiceInst,
+		garageService = GarageService,
+		dynoService = dynoServiceInst,
+		fuelService = fuelServiceInst,
+		missionService = missionServiceInst,
+		economy = economyService,
+		onVehicleOwned = registerVehicle,
+		nextTransactionId = nextTransactionId,
+	})
 
 	-- Alle generischen Remotes an den Router binden; die drei Delivery-Aktionen
 	-- bleiben dem dedizierten Delivery-Router vorbehalten.
@@ -256,21 +432,32 @@ local function onPlayerAdded(player: Player): ()
 	if shuttingDown then
 		return
 	end
-	callOptional(ProfileService, "loadPlayer", player)
-	callOptional(GarageService, "assignGarage", player)
-	callOptional(MissionService, "onPlayerJoined", player)
-	callOptional(DeliveryService, "onPlayerJoined", player)
+	local userId = canonicalUserId(player)
+	if userId == nil then
+		warn(string.format("[ToeffliTal][Server] Ungueltige UserId: %s", tostring(player.UserId)))
+		return
+	end
+	local loaded, err = pcall(function()
+		playerStore:load(userId)
+	end)
+	if not loaded then
+		warn(string.format("[ToeffliTal][Server] Profil konnte nicht geladen werden: %s", tostring(err)))
+	end
+	callOptional(GarageService, "assignGarage", servicePlayer(player))
+	registerOwnedVehicles(userId)
 	spawnPlayer(player)
 end
 
 local function onPlayerRemoving(player: Player): ()
-	callOptional(DeliveryService, "onPlayerLeaving", player)
-	callOptional(MissionService, "onPlayerLeaving", player)
-	callOptional(GarageService, "releaseGarage", player)
-	callOptional(FuelService, "onPlayerLeaving", player)
+	local userId = canonicalUserId(player)
+	callOptional(GarageService, "releaseGarage", servicePlayer(player))
 	BicycleSpawner.releaseForPlayer(player)
-	callOptional(ProfileService, "savePlayer", player)
-	callOptional(ProfileService, "unloadPlayer", player)
+	if userId ~= nil and playerStore ~= nil then
+		local ok, err = playerStore:release(userId)
+		if not ok then
+			warn(string.format("[ToeffliTal][Server] Profil konnte nicht gespeichert werden: %s", tostring(err)))
+		end
+	end
 end
 
 local function shutdown(): ()
@@ -282,17 +469,11 @@ local function shutdown(): ()
 		conn:Disconnect()
 	end
 	table.clear(connections)
-	callOptional(RequestRouter, "shutdown")
 	-- Persistenz vor Welt-Abbau: kein Datenverlust beim Herunterfahren.
-	for _, player in Players:GetPlayers() do
-		local ok, _ = pcall(function()
-			callOptional(ProfileService, "savePlayer", player)
-		end)
-		if not ok then
-			continue
-		end
+	if playerStore ~= nil then
+		local saved, failed = playerStore:saveAll()
+		print(string.format("[ToeffliTal][Server] Profile gespeichert: %d, fehlgeschlagen: %d", saved, failed))
 	end
-	callOptional(ProfileService, "shutdown")
 	callOptional(ValleyWorld, "cleanup")
 	print("[ToeffliTal][Server] Shutdown complete")
 end
@@ -304,7 +485,7 @@ local function init(): ()
 	ValleyWorld.build(workspace)
 	-- 6b. Lieferpunkte entstehen mit der Welt: DeliveryService danach konfigurieren.
 	DeliveryService.init({
-		profiles = ProfileService,
+		profiles = profileService,
 		economy = economyService,
 		world = ValleyWorld,
 		-- Der Vertical Slice startet nur mit dem Fahrrad. Alle aktuellen
