@@ -35,3 +35,12 @@ Stand: 2026-11-10
 
 ## Queue
 - Offen: Task 36h (Studio: Strassen bündig sichtbar), Task 36f (Spawn), Task 36b (Fahrphysik), Task 36e (Gebäudegrössen), Task 36a (`/buy`) und Task 36 (Mofa-Abnahme) sowie Task 32. Naechster: neuen Build im Studio öffnen und 36h/36e/36b prüfen. Danach Task 37 (Welt-Servicepunkte Tankstelle/Dyno/Toeffli-Laden), Task 38 (Bewegungs-/Tank-/Missionstracking), Task 39 (Missionspersistenz), Task 40 (15-Client-Abnahmepanel), erst dann Task 32 mit 15 echten Clients.
+
+## Nachtrag SwissMap (2026-11-12)
+- Die grosse Schweizer Karte lebt im Generator `map/SwissMap.luau` (8000x8000, Terrain + Strassen + Haeuser + Doerfer + Seen; kein Wasser-Ring, keine Fluesse). Sie wird direkt im offenen Studio-Place `11122026_1` (placeId 108633904755191) gebaut, ohne neues Fenster.
+- Dachfix, Schweizer Haustypen (`dorf`/`scheune`/`bauern`), 3 Dorfplaetze mit Brunnen, 6 Bushaltestellen, 8 Zusatzstrassen und 10 Kuhweiden sind gebaut und im Studio gesichtet.
+- Betretbare Laeden mit Inneneinrichtung, Kasse, Tueren und `JobPoint`: Doener, Toeffli-Laden, Baeckerei (467,-831), Kaeserei (-1050,-1348), Werkstatt (779,1582). Basis-Y kommt jetzt aus Terrain-Raycasts (`groundY`/`groundMaxAt`), dadurch kein Grasboden mehr in den Laeden.
+- Garagen tragen jetzt Putzfassade, Holzeckbalken und Blumenkisten statt dunkler Container-Optik.
+- Neuer `src/server/services/MapJobService.luau` zahlt die JobPoints ueber `EconomyService:credit` aus (Prompt-Trigger, Distanz 26, Cooldown 18 s), verdrahtet in `bootstrap.server.luau`.
+- Offen: Play-Test von `MapJobService`, Entscheidung ob `SwissMap` statt `ValleyWorld` die Hauptwelt wird, und die vom Nutzer genannte Zielgroesse 10000x8000.
+- **Nachtrag 2026-11-12 (Weltausbau):** `map/SwissMap.luau` baut jetzt eine rechteckige Welt **10000 x 8000** (`HALFX/HALFZ`, `NX/NZ`, Bergkranz auf beide Achsen normiert). Dorf dichter: Hausanzahl x4 (312 Haeuser), Slots lueckenlos entlang der Strassen, Hausabstand zur Strasse 4.5. Neue 3D-Details: Dachrinnen + Fallrohre, Dachgauben, Kiesweg zum Eingang, Hecken auf echter Terrainhoehe (`surfY` Raycast), Laternen mit Haube/Glas/Sockel + PointLight, Garagen mit Putzfassade, Holzeckbalken und Blumenkisten. Neu: 12 Ackerfelder mit Pflugfurchen und Holzzaun (`Aecker`). Kennzahlen: 84138 Parts, 4800 Tannen, 8 Weiden, 5 JobPoints (Doener, ToeffliLaden, Baeckerei, Kaeserei, Werkstatt). Build im Studio ohne Runtime-Fehler; naechster Schritt: weitere Dorfluecken schliessen und danach Spielcode.

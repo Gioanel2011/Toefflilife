@@ -29,6 +29,7 @@ local EconomyService = require(ServerRoot:WaitForChild("services"):WaitForChild(
 local VehicleService = require(ServerRoot:WaitForChild("services"):WaitForChild("VehicleService"))
 local MissionService = require(ServerRoot:WaitForChild("services"):WaitForChild("MissionService"))
 local DeliveryService = require(ServerRoot:WaitForChild("services"):WaitForChild("DeliveryService"))
+local MapJobService = require(ServerRoot:WaitForChild("services"):WaitForChild("MapJobService"))
 local GarageService = require(ServerRoot:WaitForChild("services"):WaitForChild("GarageService"))
 local WorkshopService = require(ServerRoot:WaitForChild("services"):WaitForChild("WorkshopService"))
 local ShopService = require(ServerRoot:WaitForChild("services"):WaitForChild("ShopService"))
@@ -66,6 +67,7 @@ local playerStore: any = nil
 local vehicleServiceInst: any = nil
 local fuelServiceInst: any = nil
 local dynoServiceInst: any = nil
+local mapJobServiceInst: any = nil
 local transactionCounter = 0
 -- Kanonische UserId -> echte Player-Instanz. Nur so kann `onVehicleOwned`
 -- ein gekauftes Mofa beim Kaeufer spawnen, obwohl der Router kanonische IDs
@@ -665,6 +667,9 @@ local function shutdown(): ()
 		print(string.format("[ToeffliTal][Server] Profile gespeichert: %d, fehlgeschlagen: %d", saved, failed))
 	end
 	callOptional(ValleyWorld, "cleanup")
+	if mapJobServiceInst ~= nil then
+		mapJobServiceInst:destroy()
+	end
 	print("[ToeffliTal][Server] Shutdown complete")
 end
 
@@ -683,6 +688,9 @@ local function init(): ()
 		-- Startlieferung; die Serverseite bleibt alleinige Quelle der Distanz.
 		starterMaxDistance = 700,
 	})
+	-- 6c. Betretbare Laeden der SwissMap: JobPoints zahlen ueber die Economy.
+	mapJobServiceInst = MapJobService.new({ economy = economyService, root = workspace })
+	mapJobServiceInst:start()
 	-- 7. Spielerbeitritt, Spawn und Verlassen verdrahten.
 	bindAcceptanceTextChat()
 	table.insert(connections, Players.PlayerAdded:Connect(onPlayerAdded))
