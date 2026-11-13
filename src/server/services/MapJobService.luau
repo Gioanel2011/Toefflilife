@@ -22,6 +22,7 @@ local DEFAULT_PAYOUTS: { [string]: number } = {
 	Baeckerei = 12,
 	Kaeserei = 12,
 	Werkstatt = 16,
+	Cafe = 11,
 }
 
 local DEFAULT_COOLDOWN = 18

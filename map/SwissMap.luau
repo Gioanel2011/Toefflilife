@@ -353,6 +353,18 @@ local function addRoad(def)
 		end
 	end
 	local P = spline(pts, def.step or 6)
+	-- Kein Asphalt im See: Punkte mit zu kleiner See-Distanz radial nach aussen schieben
+	for i, p in ipairs(P) do
+		local dcur = lakeD(p.X, p.Y)
+		if dcur < 1.34 then
+			local ex, ez = (p.X - LAKE.x) / LAKE.rx, (p.Y - LAKE.z) / LAKE.rz
+			local l = math.sqrt(ex * ex + ez * ez)
+			if l > 0.001 then
+				local k = 1.36 / l
+				P[i] = V2(LAKE.x + ex * LAKE.rx * k, LAKE.z + ez * LAKE.rz * k)
+			end
+		end
+	end
 	local hs = {}
 	for i, p in ipairs(P) do hs[i] = terrainH(p.X, p.Y) end
 	if def.topH then
@@ -866,26 +878,53 @@ local function tangent(P, i)
 	return (b - a).Unit
 end
 
-local ROAD_LIFT = 1.5
+local ROAD_TOP = 0.15          -- Fahrbahnoberkante ueber dem gemessenen Terrain
+local CURB = COL(174, 172, 166)
+local SIDEW = COL(190, 186, 178)
+
+-- Echte Terrain-Oberflaeche je Strassenpunkt (Raycast) und geglaettet
+local function roadSurface(P, hs)
+	local corr = {}
+	for i = 1, #P do corr[i] = surfY(P[i].X, P[i].Y) - hs[i] end
+	corr = smooth(corr, 3, 3)
+	local ty = {}
+	for i = 1, #P do ty[i] = hs[i] + corr[i] end
+	return ty
+end
+
 for _, R in ipairs(ROADLIST) do
 	local def, P, hs = R.def, R.P, R.hs
 	local hw, n = def.hw, #R.P
 	local F = folder(def.name, roadsF)
-	-- Asphalt (angehoben, damit er nicht im Terrain versinkt)
+	local ty = roadSurface(P, hs)
+	-- Fahrbahn + Randstein + Trottoir (alles bündig auf dem Terrain)
 	for i = 1, n - 1 do
-		local a = V3(P[i].X, hs[i] + ROAD_LIFT, P[i].Y)
-		local b = V3(P[i + 1].X, hs[i + 1] + ROAD_LIFT, P[i + 1].Y)
+		local a = V3(P[i].X, ty[i], P[i].Y)
+		local b = V3(P[i + 1].X, ty[i + 1], P[i + 1].Y)
 		local len = (b - a).Magnitude
 		if len > 0.1 then
-			part(F, V3(2 * hw, 1.2, len + 1.0), CFrame.lookAt((a + b) / 2, b), ASPH, E.Asphalt)
-			part(F, V3(2 * hw + 4, 0.8, len + 1.0), CFrame.lookAt((a + b) / 2, b) * CFrame.new(0, -0.9, 0), CONC, E.Concrete)
+			local cf = CFrame.lookAt((a + b) / 2, b)
+			part(F, V3(2 * hw, 2.4, len + 1.2), cf * CFrame.new(0, ROAD_TOP - 1.2, 0), ASPH, E.Asphalt)
+			local mid = V2((P[i].X + P[i + 1].X) / 2, (P[i].Y + P[i + 1].Y) / 2)
+			if inVillage(mid.X, mid.Y) and not nearTJ(mid.X, mid.Y, 15) and not nearRB(mid.X, mid.Y, 8) then
+				local dir = b - a
+				local yaw2 = math.atan2(dir.X, dir.Z)
+				local roadTop = (ty[i] + ty[i + 1]) / 2 + ROAD_TOP
+				for _, sx in ipairs({ -1, 1 }) do
+					local sw = (cf * CFrame.new(sx * (hw + 1.75), 0, 0)).Position
+					local st = math.max(surfY(sw.X, sw.Z) + 0.22, roadTop + 0.05)
+					part(F, V3(2.5, 1.9, len + 1.2), CFrame.new(sw.X, st - 0.95, sw.Z) * CFrame.Angles(0, yaw2, 0), SIDEW, E.Cobblestone)
+					local cb = (cf * CFrame.new(sx * (hw + 0.25), 0, 0)).Position
+					part(F, V3(0.5, 0.9, len + 1.2), CFrame.new(cb.X, st - 0.45, cb.Z) * CFrame.Angles(0, yaw2, 0), CURB, E.Concrete)
+				end
+			end
 		end
 	end
 	-- Markierungen
 	if def.kind == "main" or def.kind == "pass" then
 		for i = 3, n - 3, 2 do   -- gestrichelter Mittelstrich
-			if not nearRB(P[i].X, P[i].Y, 8) then
-				lineSeg(F, P[i], P[i + 1], (hs[i] + hs[i + 1]) / 2 + ROAD_LIFT + 0.7, 0.45, WHITE)
+			if not nearRB(P[i].X, P[i].Y, 8) and not nearTJ(P[i].X, P[i].Y, 14) then
+				lineSeg(F, P[i], P[i + 1], (ty[i] + ty[i + 1]) / 2 + ROAD_TOP + 0.06, 0.45, WHITE)
 			end
 		end
 		for i = 2, n - 2, 2 do   -- durchgezogene Randlinien
@@ -893,7 +932,7 @@ for _, R in ipairs(ROADLIST) do
 			if not nearRB(mid.X, mid.Y, 6) and not nearTJ(mid.X, mid.Y, 13) then
 				local t1, t2 = tangent(P, i), tangent(P, i + 2)
 				local n1, n2 = V2(-t1.Y, t1.X), V2(-t2.Y, t2.X)
-				local y = (hs[i] + hs[i + 2]) / 2 + ROAD_LIFT + 0.7
+				local y = (ty[i] + ty[i + 2]) / 2 + ROAD_TOP + 0.06
 				for _, s in ipairs({ -1, 1 }) do
 					lineSeg(F, P[i] + n1 * s * (hw - 1.1), P[i + 2] + n2 * s * (hw - 1.1), y, 0.35, WHITE)
 				end
@@ -905,10 +944,11 @@ for _, R in ipairs(ROADLIST) do
 		local d = st.dir
 		local right = V2(d.Y, -d.X)           -- rechte Seite des anfahrenden Fahrzeugs
 		local s0 = st.pos + d * 3.2
-		local yy = hs[(st.which == "start") and 1 or n]
-		lineSeg(F, s0, s0 + right * hw, yy + ROAD_LIFT + 0.7, 0.9, WHITE)
+		local idx = (st.which == "start") and 1 or n
+		local yy = ty[idx]
+		lineSeg(F, s0, s0 + right * hw, yy + ROAD_TOP + 0.07, 0.9, WHITE)
 		local sp = s0 + right * (hw + 2.6)
-		stopSign(signsF, sp.X, sp.Y, yy + ROAD_LIFT, d)
+		stopSign(signsF, sp.X, sp.Y, surfY(sp.X, sp.Y) + 0.34, d)
 	end
 	-- Strassenlaternen im Dorf
 	if def.kind == "main" or def.kind == "minor" then
@@ -919,7 +959,7 @@ for _, R in ipairs(ROADLIST) do
 				local t = tangent(P, s)
 				local nr = V2(-t.Y, t.X) * side
 				local lp = p + nr * (hw + 1.8)
-				lampPost(lampsF, lp.X, hs[s], lp.Y, p)
+				lampPost(lampsF, lp.X, surfY(lp.X, lp.Y) + 0.3, lp.Y, p)
 				side = -side
 			end
 		end
@@ -950,9 +990,9 @@ for _, R in ipairs(ROADLIST) do
 				if not nearRB(P[i].X, P[i].Y, 30) and not nearTJ(P[i].X, P[i].Y, 25) then
 					local rPlus = V2(-f.Y, f.X)            -- rechts bei Fahrt in + Richtung
 					local pp = P[i] + rPlus * (hw + 2.6)
-					speedSign(signsF, pp.X, pp.Y, hs[i], -f, place[1])
+					speedSign(signsF, pp.X, pp.Y, surfY(pp.X, pp.Y) + 0.3, -f, place[1])
 					local pm = P[i] - rPlus * (hw + 2.6)   -- Gegenrichtung
-					speedSign(signsF, pm.X, pm.Y, hs[i], f, place[2])
+					speedSign(signsF, pm.X, pm.Y, surfY(pm.X, pm.Y) + 0.3, f, place[2])
 				end
 			end
 		end
@@ -965,22 +1005,24 @@ print("[Swiss Map] Schilder gebaut")
 ----------------------------------------------------------------
 local rbF = folder("Kreisel")
 for _, rb in ipairs(RBS) do
-	local cx, cz, h = rb.c.X, rb.c.Y, rb.h
+	local cx, cz = rb.c.X, rb.c.Y
 	local Rm = (rb.Rin + rb.Rout) / 2
 	local SEG = 48
+	local hy = surfY(cx, cz) + 0.15
 	for k = 0, SEG - 1 do
 		local th = k * 2 * math.pi / SEG
-		local pos = V3(cx + math.cos(th) * Rm, h, cz + math.sin(th) * Rm)
+		local px, pz = cx + math.cos(th) * Rm, cz + math.sin(th) * Rm
+		local pos = V3(px, surfY(px, pz) + 0.15, pz)
 		local tan = V3(-math.sin(th), 0, math.cos(th))
 		part(rbF, V3(rb.Rout - rb.Rin, 0.8, 2 * math.pi * Rm / SEG * 1.4), CFrame.lookAt(pos, pos + tan), ASPH, E.Asphalt)
 	end
 	-- Insel
-	part(rbF, V3(1.0, 2 * (rb.Rin + 0.8), 2 * (rb.Rin + 0.8)), CFrame.new(cx, h + 0.5, cz) * UP, COL(176, 176, 172), E.Concrete, CYL)
-	part(rbF, V3(1.2, 2 * (rb.Rin - 0.3), 2 * (rb.Rin - 0.3)), CFrame.new(cx, h + 0.55, cz) * UP, COL(86, 150, 68), E.Grass, CYL)
-	swissFlag(rbF, cx, h + 1, cz, 15, 0.6)
+	part(rbF, V3(1.0, 2 * (rb.Rin + 0.8), 2 * (rb.Rin + 0.8)), CFrame.new(cx, hy + 0.5, cz) * UP, COL(176, 176, 172), E.Concrete, CYL)
+	part(rbF, V3(1.2, 2 * (rb.Rin - 0.3), 2 * (rb.Rin - 0.3)), CFrame.new(cx, hy + 0.55, cz) * UP, COL(86, 150, 68), E.Grass, CYL)
+	swissFlag(rbF, cx, hy + 1, cz, 15, 0.6)
 	for k = 0, 13 do
 		local th = k * 2 * math.pi / 14
-		part(rbF, V3(1.1, 1.1, 1.1), CFrame.new(cx + math.cos(th) * 7.5, h + 1.4, cz + math.sin(th) * 7.5),
+		part(rbF, V3(1.1, 1.1, 1.1), CFrame.new(cx + math.cos(th) * 7.5, hy + 1.4, cz + math.sin(th) * 7.5),
 			pick({ COL(230, 60, 70), COL(250, 210, 70), COL(245, 245, 245), COL(240, 130, 190) }), E.SmoothPlastic, BALL, false)
 	end
 end
@@ -1210,7 +1252,7 @@ end
 -- Grundflaeche der Haeuser; Hoehe waechst ueber FH, Tueren bleiben menschlich.
 local HOUSE_SCALE = 1.8
 local usedHouse = {}
-local function rollHouse()
+local function rollHouse(wantRoof)
 	for _ = 1, 20 do
 		local r = math.random()
 		local kind = (r < 0.24 and "chalet") or (r < 0.40 and "dorf") or (r < 0.52 and "bauern")
@@ -1294,10 +1336,14 @@ local function rollHouse()
 		end
 		S.W = math.floor(S.W * HOUSE_SCALE * 2 + 0.5) / 2
 		S.D = math.floor(S.D * HOUSE_SCALE * 2 + 0.5) / 2
-		local key = table.concat({ kind, S.W, S.D, S.floors, tostring(S.wallC), tostring(S.roofC), tostring(S.doorC) }, "|")
-		if not usedHouse[key] then
-			usedHouse[key] = true
-			return S
+		local flat = (S.roofType == "flat")
+		local mismatch = (wantRoof == "flat" and not flat) or (wantRoof == "gable" and flat)
+		if not mismatch then
+			local key = table.concat({ kind, S.W, S.D, S.floors, tostring(S.wallC), tostring(S.roofC), tostring(S.doorC) }, "|")
+			if not usedHouse[key] then
+				usedHouse[key] = true
+				return S
+			end
 		end
 	end
 	return nil
@@ -1471,21 +1517,24 @@ local function buildHouse(parent, pos, yaw, S)
 	local plate = part(m, V3(1.5, 1.0, 0.2), fr.front * CFrame.new(doorU + 3.3, 5.2, -0.45), WHITE)
 	textOn(plate, Enum.NormalId.Front, tostring(math.random(1, 99)), COL(20, 20, 20), Enum.Font.GothamBold)
 	-- Garten
+	local lot = S.lot or 9.8
 	part(m, V3(3.6, 0.2, 5.4), fr.front * CFrame.new(doorU, 0.1, -5.4), STONE, E.Cobblestone)
-	-- Kiesweg vom Eingang bis zur Strasse (auf die echte Terrainhoehe gesetzt)
+	-- Kiesweg vom Eingang bis zum Trottoir (auf die echte Terrainhoehe gesetzt)
 	do
-		local wp = (fr.front * CFrame.new(doorU, 0, -3.8)).Position
+		local plen = math.max(3, lot - 2.4)
+		local wp = (fr.front * CFrame.new(doorU, 0, -(0.5 + plen / 2))).Position
 		local gy = surfY(wp.X, wp.Z)
-		part(m, V3(3.6, 0.16, 6.0), CFrame.new(wp.X, gy + 0.12, wp.Z) * CFrame.Angles(0, yaw, 0), COL(178, 170, 154), E.Ground)
+		part(m, V3(3.4, 0.16, plen), CFrame.new(wp.X, gy + 0.12, wp.Z) * CFrame.Angles(0, yaw, 0), COL(178, 170, 154), E.Ground)
 	end
+	local hedgeZ = -(lot - 1.2)
 	if S.fence then
-		fenceLine(m, fr.front, -W / 2 - 4, doorU - 2.4, -7.6, S.wood)
-		fenceLine(m, fr.front, doorU + 2.4, W / 2 + 4, -7.6, S.wood)
+		fenceLine(m, fr.front, -W / 2 - 4, doorU - 2.4, hedgeZ, S.wood)
+		fenceLine(m, fr.front, doorU + 2.4, W / 2 + 4, hedgeZ, S.wood)
 	elseif S.hedge then
 		for _, seg in ipairs({ { -W / 2 - 4, doorU - 2.4 }, { doorU + 2.4, W / 2 + 4 } }) do
 			if seg[2] - seg[1] > 2 then
 				local cu = (seg[1] + seg[2]) / 2
-				local wp = (fr.front * CFrame.new(cu, 0, -7.6)).Position
+				local wp = (fr.front * CFrame.new(cu, 0, hedgeZ)).Position
 				local gy = surfY(wp.X, wp.Z)
 				part(m, V3(seg[2] - seg[1], 1.8, 1.2), CFrame.new(wp.X, gy + 0.85, wp.Z) * CFrame.Angles(0, yaw, 0), COL(58, 116, 54), E.Grass)
 			end
@@ -1496,8 +1545,8 @@ local function buildHouse(parent, pos, yaw, S)
 		part(m, V3(3.2, 1.0, 0.25), fr.front * CFrame.new(doorU - 5.2, 1.9, -2.0), S.wood, E.Wood)
 	end
 	if S.mailbox then
-		part(m, V3(0.4, 1.8, 0.4), fr.front * CFrame.new(doorU + 4.6, 0.9, -7.2), COL(70, 70, 74), E.Metal)
-		part(m, V3(1.2, 0.9, 0.8), fr.front * CFrame.new(doorU + 4.6, 2.1, -7.2), COL(255, 204, 0), E.SmoothPlastic)
+		part(m, V3(0.4, 1.8, 0.4), fr.front * CFrame.new(doorU + 4.6, 0.9, hedgeZ + 0.4), COL(70, 70, 74), E.Metal)
+		part(m, V3(1.2, 0.9, 0.8), fr.front * CFrame.new(doorU + 4.6, 2.1, hedgeZ + 0.4), COL(255, 204, 0), E.SmoothPlastic)
 	end
 	if S.tree then
 		local side = pick({ -1, 1 })
@@ -1744,13 +1793,20 @@ local function buildChurch(parent, x, y, z, yaw)
 	for s = 1, 3 do
 		part(m, V3(11 - s * 0.9, 0.5, 2.6 - 0.0), ft * CFrame.new(0, 1.0 - s * 0.35, -(0.9 + s * 0.8)), STONE, E.Concrete)
 	end
-	-- Weg + Friedhof + Baeume
-	part(m, V3(12, 0.25, 40), base * CFrame.new(0, 0.1, TZ + 4.5 + 20), COL(176, 172, 164), E.Cobblestone)
+	-- Weg zum Portal (folgt dem Terrain, sonst schwebt er)
+	for k = 0, 7 do
+		local zz = TZ + 7.0 + k * 5.0
+		local wp = (base * CFrame.new(0, 0, zz)).Position
+		local gy = surfY(wp.X, wp.Z)
+		part(m, V3(12, 0.3, 5.4), CFrame.new(wp.X, gy + 0.12, wp.Z) * CFrame.Angles(0, yaw, 0), COL(176, 172, 164), E.Cobblestone)
+	end
 	for i = 0, 7 do
 		local gx = -24 - (i % 4) * 5.4
 		local gz = -9 + math.floor(i / 4) * 9
-		part(m, V3(2.1, 3.3, 0.75), base * CFrame.new(gx, 1.65, gz), COL(130, 130, 136), E.Slate)
-		part(m, V3(0.6, 1.5, 0.6), base * CFrame.new(gx, 3.9, gz), COL(130, 130, 136), E.Slate)
+		local wp = (base * CFrame.new(gx, 0, gz)).Position
+		local gy = surfY(wp.X, wp.Z)
+		part(m, V3(2.1, 3.3, 0.75), CFrame.new(wp.X, gy + 1.65, wp.Z) * CFrame.Angles(0, yaw, 0), COL(130, 130, 136), E.Slate)
+		part(m, V3(0.6, 1.5, 0.6), CFrame.new(wp.X, gy + 3.9, wp.Z), COL(130, 130, 136), E.Slate)
 	end
 	part(m, V3(27, 1.2, 0.9), base * CFrame.new(-33.75, 0.6, -16.5), STONE, E.Cobblestone)
 	part(m, V3(27, 1.2, 0.9), base * CFrame.new(-33.75, 0.6, 10.5), STONE, E.Cobblestone)
@@ -2129,7 +2185,7 @@ local function buildToeffliShop(parent, x, y, z, yaw)
 	end
 	-- Reifenstapel
 	for q = 0, 3 do
-		part(m, V3(3.2, 0.9, 3.2), base * CFrame.new(-W / 2 + 3.4, 2.0 + q * 0.95, 5.4), COL(38, 38, 44), E.Rubber, CYL)
+		part(m, V3(0.9, 3.2, 3.2), base * CFrame.new(-W / 2 + 3.4, 2.0 + q * 0.95, 5.4) * UP, COL(38, 38, 44), E.Rubber, CYL)
 	end
 	-- Deckenlampen
 	for _, lx in ipairs({ -5, 5 }) do
@@ -2297,7 +2353,7 @@ local function buildWorkshop(parent, x, y, z, yaw)
 	part(m, V3(1.2, 1.0, 1.2), base * CFrame.new(6.0, 4.4, -3.6), COL(70, 74, 80), E.Metal)
 	-- Reifenstapel + Oelfaesser
 	for _, q in ipairs({ 0, 1, 2, 3 }) do
-		part(m, V3(3.4, 1.0, 3.4), base * CFrame.new(9.6, 2.0 + q * 1.05, 6.0), COL(38, 38, 44), E.Rubber, CYL)
+		part(m, V3(1.0, 3.4, 3.4), base * CFrame.new(9.6, 2.0 + q * 1.05, 6.0) * UP, COL(38, 38, 44), E.Rubber, CYL)
 	end
 	for q = 0, 2 do
 		upright(m, (base * CFrame.new(4.6 + q * 2.6, 1.2, 8.4)).Position, 3.4, 2.4, (q == 1) and COL(60, 110, 70) or COL(190, 70, 50), E.Metal)
@@ -2402,17 +2458,17 @@ local function buildGarage(parent, g)
 		end
 	end
 	-- Vorplatz + Markierungen + Velo/Toeffli-Abstellplatz
-	part(m, V3(W + 4, 1.2, 20), base * CFrame.new(0, -0.3, D / 2 + 0.8 + 10), COL(176, 176, 170), E.Concrete)
+	part(m, V3(W + 4, 1.2, 20), base * CFrame.new(0, -0.57, D / 2 + 0.8 + 10), COL(176, 176, 170), E.Concrete)
 	for _, sx in ipairs({ -1, 1 }) do
-		part(m, V3(0.3, 0.1, 20), base * CFrame.new(sx * (W / 2 + 1.5), 0.33, D / 2 + 0.8 + 10), YEL, E.SmoothPlastic, nil, false)
+		part(m, V3(0.3, 0.1, 20), base * CFrame.new(sx * (W / 2 + 1.5), 0.06, D / 2 + 0.8 + 10), YEL, E.SmoothPlastic, nil, false)
 	end
 	for _, sx in ipairs({ -1, 1 }) do
-		part(m, V3(0.25, 0.1, 7), fr * CFrame.new(UD + sx * 1.5, 0.33, -9), WHITE, E.SmoothPlastic, nil, false)
+		part(m, V3(0.25, 0.1, 7), fr * CFrame.new(UD + sx * 1.5, 0.06, -9), WHITE, E.SmoothPlastic, nil, false)
 	end
 	for _, tz in ipairs({ -5.5, -12.5 }) do
-		part(m, V3(3.2, 0.1, 0.25), fr * CFrame.new(UD, 0.33, tz), WHITE, E.SmoothPlastic, nil, false)
+		part(m, V3(3.2, 0.1, 0.25), fr * CFrame.new(UD, 0.06, tz), WHITE, E.SmoothPlastic, nil, false)
 	end
-	local spawn = part(m, V3(2.6, 0.2, 6.4), fr * CFrame.new(UD, 0.4, -9), WHITE, E.SmoothPlastic, nil, false, 1)
+	local spawn = part(m, V3(2.6, 0.2, 6.4), fr * CFrame.new(UD, 0.13, -9), WHITE, E.SmoothPlastic, nil, false, 1)
 	spawn.Name = "BikeSpawn"
 	spawn:SetAttribute("GarageNumber", g.idx)
 	-- Deko: Reifenstapel, Oelfaesser, Pflanzkuebel
@@ -2429,6 +2485,87 @@ local function buildGarage(parent, g)
 		local pp = (fr * CFrame.new(sx * (W / 2 + 1.2), 0.9, -19)).Position
 		part(m, V3(2.4, 1.2, 2.4), CFrame.new(pp) * CFrame.Angles(0, g.yaw, 0), COL(110, 76, 50), E.Wood)
 		part(m, V3(2.8, 2.8, 2.8), CFrame.new(pp.X, pp.Y + 1.5, pp.Z), COL(70, 130, 60), E.Grass, BALL, false)
+	end
+	return m
+end
+
+----------------------------------------------------------------
+-- SEEUFER-CAFE + PARKPLATZ
+----------------------------------------------------------------
+local function buildCafe(parent, x, y, z, yaw)
+	local W, D, H = 24, 17, 12
+	local ae = utf8.char(228)
+	local m, base, fr = shopShell(parent, {
+		name = "Cafe", x = x, y = y, z = z, yaw = yaw, w = W, d = D, h = H,
+		wall = COL(246, 238, 222), roofC = COL(118, 72, 58), roofMat = E.Slate, roof = "gable",
+		sign = "CAF" .. ae .. " SEEBLICK", sub = "Kaffee  -  Gipfeli  -  Aussicht",
+	})
+	local wood, dark = COL(158, 118, 80), COL(44, 46, 52)
+	-- Terrasse zum See (Kacheln auf echtem Terrain, kein schwebendes Deck)
+	local deckZ = D / 2 + 6.5
+	local dc = (base * CFrame.new(0, 0, deckZ)).Position
+	local deckTop = surfY(dc.X, dc.Z) + 0.55
+	part(m, V3(W + 4, 1.8, 11), CFrame.new(dc.X, deckTop - 0.9, dc.Z) * CFrame.Angles(0, yaw, 0), COL(168, 128, 92), E.WoodPlanks)
+	local rail = (base * CFrame.new(0, 0, deckZ + 5.4)).Position
+	part(m, V3(W + 4, 1.4, 0.3), CFrame.new(rail.X, deckTop + 0.85, rail.Z) * CFrame.Angles(0, yaw, 0), COL(150, 110, 76), E.Wood)
+	for _, sx in ipairs({ -6.5, 0, 6.5 }) do
+		local tw = (base * CFrame.new(sx, 0, deckZ)).Position
+		part(m, V3(3.2, 0.3, 3.2), CFrame.new(tw.X, deckTop + 0.15, tw.Z) * CFrame.Angles(0, yaw, 0), COL(228, 220, 206), E.Marble)
+		upright(m, V3(tw.X, deckTop - 0.4, tw.Z), 1.4, 0.4, dark, E.Metal)
+		for _, st in ipairs({ -1, 1 }) do
+			local sw = (base * CFrame.new(sx + st * 2.6, 0, deckZ)).Position
+			part(m, V3(1.5, 0.3, 1.5), CFrame.new(sw.X, deckTop - 0.05, sw.Z) * CFrame.Angles(0, yaw, 0), COL(70, 74, 80), E.Metal)
+			upright(m, V3(sw.X, deckTop - 0.4, sw.Z), 0.9, 0.35, COL(70, 74, 80), E.Metal, false)
+		end
+		upright(m, V3(tw.X, deckTop - 0.4, tw.Z), 9.8, 0.28, COL(190, 190, 194), E.Metal, false)
+		part(m, V3(0.5, 9.5, 9.5), CFrame.new(tw.X, deckTop + 9.6, tw.Z) * UP, COL(226, 74, 66), E.Fabric, CYL, false)
+	end
+	-- Innen: Theke, Kaffeemaschine, Vitrine, Sitzplaetze
+	part(m, V3(9, 3.2, 2.4), base * CFrame.new(-4.2, 2.7, -D / 2 + 2.4), wood, E.WoodPlanks)
+	part(m, V3(9.6, 0.3, 3.0), base * CFrame.new(-4.2, 4.45, -D / 2 + 2.4), COL(232, 228, 220), E.Marble)
+	part(m, V3(2.4, 2.6, 1.8), base * CFrame.new(-6.4, 5.7, -D / 2 + 2.2), COL(60, 62, 68), E.Metal)
+	part(m, V3(1.6, 1.0, 0.4), base * CFrame.new(-6.4, 5.4, -D / 2 + 3.1), COL(120, 124, 130), E.Metal)
+	part(m, V3(8.2, 0.24, 2.4), base * CFrame.new(2.6, 5.5, -D / 2 + 2.4), COL(180, 220, 236), E.Glass, nil, false, 0.55)
+	for q = 0, 5 do
+		part(m, V3(1.0, 0.7, 1.0), base * CFrame.new(0.2 + q * 1.3, 4.9, -D / 2 + 2.4), (q % 2 == 0) and COL(196, 148, 88) or COL(238, 214, 160), E.Fabric, BALL, false)
+	end
+	for _, q in ipairs({ { 6.4, -1.2 }, { 6.4, 3.2 } }) do
+		part(m, V3(3.2, 0.3, 3.2), base * CFrame.new(q[1], 3.4, q[2]), wood, E.Wood)
+		upright(m, (base * CFrame.new(q[1], 1.2, q[2])).Position, 2.2, 0.45, dark, E.Metal)
+		for _, st in ipairs({ -1, 1 }) do
+			part(m, V3(1.5, 0.3, 1.5), base * CFrame.new(q[1] + st * 2.5, 2.6, q[2]), COL(70, 74, 80), E.Metal)
+			upright(m, (base * CFrame.new(q[1] + st * 2.5, 1.0, q[2])).Position, 1.6, 0.4, COL(70, 74, 80), E.Metal, false)
+		end
+	end
+	-- Tafel + Pflanzen + Licht
+	local board = part(m, V3(6.4, 3.0, 0.2), base * CFrame.new(-1.4, 8.4, -D / 2 + 0.9) * CFrame.Angles(0, math.pi, 0), COL(42, 46, 44), E.SmoothPlastic)
+	textOn(board, Enum.NormalId.Front, "CAF" .. ae .. " SEEBLICK\nKaffee  3.80\nLatte  4.60\nGipfeli  2.20", COL(240, 236, 224), Enum.Font.GothamBold)
+	for _, lx in ipairs({ -6, 6 }) do
+		local lamp = part(m, V3(2.6, 0.35, 2.6), base * CFrame.new(lx, 1 + H - 0.6, 0), COL(255, 236, 190), E.Neon, nil, false)
+		local pl = Instance.new("PointLight")
+		pl.Range, pl.Brightness, pl.Color = 32, 1.5, COL(255, 226, 180)
+		pl.Parent = lamp
+	end
+	for _, sx in ipairs({ -1, 1 }) do
+		upright(m, (base * CFrame.new(sx * (W / 2 + 1.4), 0.7, D / 2 + 1.2)).Position, 1.6, 1.4, COL(176, 96, 64), E.Concrete)
+		part(m, V3(3.0, 3.0, 3.0), base * CFrame.new(sx * (W / 2 + 1.4), 3.2, D / 2 + 1.2), COL(70, 130, 60), E.Grass, BALL, false)
+	end
+	addJobPoint(m, base, V3(-1.0, 2.6, -2.0), "Cafe", "Kaffee servieren", "Caf" .. ae .. " Seeblick")
+	return m
+end
+
+local function buildParking(parent, x, y, z, yaw)
+	local m = Instance.new("Model")
+	m.Name = "Parkplatz"
+	m.Parent = parent
+	local base = CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0)
+	local pc = (base * CFrame.new(0, 0, -24)).Position
+	local gy = math.max(surfY(pc.X, pc.Z), y - 0.5)
+	part(m, V3(32, 1.6, 19), CFrame.new(pc.X, gy - 0.65, pc.Z) * CFrame.Angles(0, yaw, 0), COL(62, 64, 70), E.Asphalt)
+	for q = 0, 5 do
+		local px = -13 + q * 5.2
+		local wp = (base * CFrame.new(px, 0, -24)).Position
+		part(m, V3(0.18, 0.1, 13), CFrame.new(wp.X, gy + 0.18, wp.Z) * CFrame.Angles(0, yaw, 0), WHITE, E.SmoothPlastic, nil, false)
 	end
 	return m
 end
@@ -2482,12 +2619,48 @@ do
 	sp.Transparency = 1
 	sp.Parent = map
 end
-buildChurch(buildingsF, CHURCH.x, VILLAGES[1].h, CHURCH.z, CHURCH.yaw)
+do
+	local cy = groundMaxAt(CFrame.new(CHURCH.x, 0, CHURCH.z), 24, 22)
+	if cy == -math.huge then cy = VILLAGES[1].h end
+	buildChurch(buildingsF, CHURCH.x, cy + 1.5, CHURCH.z, CHURCH.yaw)
+end
 occAdd(CHURCH.x, CHURCH.z + 8, 50)
+-- Seeufer-Cafe + Parkplatz an der Stelle, an der eine Strasse dem See am naechsten kommt
+do
+	local best, bd = nil, math.huge
+	for _, R in ipairs(ROADLIST) do
+		for _, p in ipairs(R.P) do
+			local d = lakeD(p.X, p.Y)
+			if d < bd then bd = d; best = p end
+		end
+	end
+	if best then
+		local ex, ez = (best.X - LAKE.x) / LAKE.rx, (best.Y - LAKE.z) / LAKE.rz
+		local l = math.sqrt(ex * ex + ez * ez)
+		if l > 0.001 then
+			ex, ez = ex / l, ez / l
+			local cx2 = LAKE.x + ex * LAKE.rx * 1.06
+			local cz2 = LAKE.z + ez * LAKE.rz * 1.06
+			local gy = groundMaxAt(CFrame.new(cx2, 0, cz2), 22, 20)
+			if gy == -math.huge then gy = surfY(cx2, cz2) end
+			local yaw = math.atan2(-ex, -ez)
+			local cafeF = folder("Seeufer", buildingsF)
+			buildCafe(cafeF, cx2, gy + 0.5, cz2, yaw)
+			buildParking(cafeF, cx2, gy + 0.5, cz2, yaw)
+			occAdd(cx2, cz2, 40)
+			local px, pz = cx2 + math.sin(yaw) * -30, cz2 + math.cos(yaw) * -30
+			connectToRoad(cafeF, px, pz, 18, 12)
+			print(("[Swiss Map] Cafe am See bei %.0f, %.0f"):format(cx2, cz2))
+		end
+	end
+end
 print("[Swiss Map] Doener + Kirche fertig")
 
 local garF = folder("Garagen")
 for _, g in ipairs(GARAGES) do
+	-- Basis erst nach dem Terrain-Schreiben aus der echten Oberflaeche bestimmen
+	local gy = groundMaxAt(CFrame.new(g.x, 0, g.z), GW / 2 + 2, GD / 2 + 2)
+	if gy ~= -math.huge then g.h = gy end
 	buildGarage(garF, g)
 	occAdd(g.x + g.nx * 10, g.z + g.nz * 10, 48)
 	task.wait()
@@ -2538,6 +2711,8 @@ print(("[Swiss Map] %d Bushaltestellen"):format(nStops))
 ----------------------------------------------------------------
 local housesF = folder("Haeuser")
 local nHouses = 0
+-- Eigenes Quartier fuer Flachdaecher (nichts zwischen Satteldaechern mischen)
+local MODERN = { x = VILLAGES[3].x + 230, z = VILLAGES[3].z - 60, r = 250 }
 for _, v in ipairs(VILLAGES) do
 	local vf = folder("Haeuser_" .. v.name, housesF)
 	local slots = {}
@@ -2561,35 +2736,51 @@ for _, v in ipairs(VILLAGES) do
 	end
 	table.sort(slots, function(a, b) return a.key < b.key end)
 	local placed = 0
+	-- Bauzeilen: 4-6 Haeuser mit gleichem Dachtyp, dann eine sichtbare Luecke.
+	local blockLeft, blockRoof, gapLeft = 0, "gable", 0
 	for _, s in ipairs(slots) do
 		if placed >= v.count then break end
-		local S = rollHouse()
-		if not S then break end
-		local off = s.hw + 4.5 + S.D / 2
-		local x = s.p.X + s.nr.X * s.side * off
-		local z = s.p.Y + s.nr.Y * s.side * off
-		local yaw = math.atan2(-s.nr.X * s.side, -s.nr.Y * s.side)
-		local ok = dist2(x, z, v.x, v.z) < v.rf + 12 * WS
-			and occFreeRect(x, z, S.W / 2 + 1.0, S.D / 2 + 1.0, yaw)
-			and lakeD(x, z) > 1.1
-		if ok then
-			local d, _, hw = roadQuery(x, z)
-			if d and d - hw < S.D / 2 + 2.5 then ok = false end
-		end
-		if ok then
-			local cf = CFrame.new(x, 0, z) * CFrame.Angles(0, yaw, 0)
-			local hmin, hmax = math.huge, -math.huge
-			for _, q in ipairs({ { 0, 0 }, { S.W / 2, S.D / 2 }, { -S.W / 2, S.D / 2 }, { S.W / 2, -S.D / 2 }, { -S.W / 2, -S.D / 2 } }) do
-				local wp = (cf * CFrame.new(q[1], 0, q[2])).Position
-				local hh = heightAt(wp.X, wp.Z)
-				hmin, hmax = math.min(hmin, hh), math.max(hmax, hh)
-			end
-			if hmax - hmin <= 3.2 then
-				buildHouse(vf, V3(x, hmin + 0.6, z), yaw, S)
-				occAddRect(x, z, S.W / 2 + 1.0, S.D / 2 + 1.0, yaw)
-				placed = placed + 1
-				nHouses = nHouses + 1
-				task.wait()
+		if gapLeft > 0 then
+			gapLeft = gapLeft - 1
+		elseif blockLeft <= 0 then
+			local modern = dist2(s.p.X, s.p.Y, MODERN.x, MODERN.z) < MODERN.r
+			blockRoof = (modern and math.random() < 0.85) and "flat" or "gable"
+			blockLeft = math.random(4, 6)
+			gapLeft = (placed > 0) and math.random(2, 3) or 0
+		else
+			local S = rollHouse(blockRoof)
+			if S then
+				local off = s.hw + 3.2 + 9.8 + S.D / 2
+				local x = s.p.X + s.nr.X * s.side * off
+				local z = s.p.Y + s.nr.Y * s.side * off
+				local yaw = math.atan2(-s.nr.X * s.side, -s.nr.Y * s.side)
+				S.lot = 9.8
+				local ok = dist2(x, z, v.x, v.z) < v.rf + 12 * WS
+					and occFreeRect(x, z, S.W / 2 + 3.0, S.D / 2 + 3.0, yaw)
+					and lakeD(x, z) > 1.1
+				if ok then
+					local d, _, hw = roadQuery(x, z)
+					if d and d - hw < S.D / 2 + 2.5 then ok = false end
+				end
+				if ok then
+					local cf = CFrame.new(x, 0, z) * CFrame.Angles(0, yaw, 0)
+					local hmin, hmax = math.huge, -math.huge
+					for _, q in ipairs({ { 0, 0 }, { S.W / 2, S.D / 2 }, { -S.W / 2, S.D / 2 }, { S.W / 2, -S.D / 2 }, { -S.W / 2, -S.D / 2 } }) do
+						local wp = (cf * CFrame.new(q[1], 0, q[2])).Position
+						local hh = heightAt(wp.X, wp.Z)
+						hmin, hmax = math.min(hmin, hh), math.max(hmax, hh)
+					end
+					if hmax - hmin <= 3.2 then
+						local gy = groundMaxAt(cf, S.W / 2, S.D / 2)
+						if gy == -math.huge then gy = hmin + 0.6 end
+						buildHouse(vf, V3(x, gy + 0.35, z), yaw, S)
+						occAddRect(x, z, S.W / 2 + 3.0, S.D / 2 + 3.0, yaw)
+						placed = placed + 1
+						nHouses = nHouses + 1
+						blockLeft = blockLeft - 1
+						task.wait()
+					end
+				end
 			end
 		end
 	end
@@ -2822,12 +3013,7 @@ for _ = 1, 400 do
 					end
 				end
 			end
-			-- niedriger Holzzaun rundum mit Feldtor
-			fenceRun(F, cx - FW / 2, cz - FD / 2, cx + FW / 2, cz - FD / 2)
-			fenceRun(F, cx - FW / 2, cz + FD / 2, cx - 6, cz + FD / 2)
-			fenceRun(F, cx + 6, cz + FD / 2, cx + FW / 2, cz + FD / 2)
-			fenceRun(F, cx - FW / 2, cz - FD / 2, cx - FW / 2, cz + FD / 2)
-			fenceRun(F, cx + FW / 2, cz - FD / 2, cx + FW / 2, cz + FD / 2)
+			-- Kein Zaun: Felder sind offen (Zaeune gehoeren zu Tieren)
 			task.wait()
 		end
 	end
