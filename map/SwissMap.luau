@@ -123,9 +123,9 @@ end
 -- DOERFER / FLACHE ZONEN
 ----------------------------------------------------------------
 local VILLAGES = {
-	{ name = "Hauptdorf", x = 60, z = -260, rf = 165, rb = 250, rs = 190, count = 36 },
-	{ name = "Seedorf", x = -250, z = -390, rf = 110, rb = 185, rs = 145, count = 22 },
-	{ name = "Talort", x = 130, z = 455, rf = 115, rb = 190, rs = 140, count = 20 },
+	{ name = "Hauptdorf", x = 60, z = -260, rf = 215, rb = 320, rs = 300, count = 27 },
+	{ name = "Seedorf", x = -250, z = -390, rf = 143, rb = 240, rs = 230, count = 17 },
+	{ name = "Talort", x = 130, z = 455, rf = 150, rb = 245, rs = 225, count = 15 },
 }
 local FLATS = {}
 for _, v in ipairs(VILLAGES) do
@@ -152,8 +152,9 @@ local function terrainH(x, z)
 end
 
 local RBS = {
-	{ c = V2(60 * WS, -260 * WS), Rin = 12, Rout = 27, h = VILLAGES[1].h },
-	{ c = V2(130 * WS, 455 * WS), Rin = 12, Rout = 27, h = VILLAGES[3].h },
+	-- Kit-Kreisel: Ring aus 4 Curve90 + 4 Seitenteilen, Aussenkante 144, Insel 72
+	{ c = V2(216, -1008), Rin = 36, Rout = 72, h = VILLAGES[1].h },
+	{ c = V2(504, 1800), Rin = 36, Rout = 72, h = VILLAGES[3].h },
 }
 local RB1, RB2 = RBS[1].c, RBS[2].c
 
@@ -246,9 +247,9 @@ local ROADS = {
 	{ name = "Moosweg", kind = "minor", hw = 6.5, tStart = true, pts = {
 		V2(80, -130), V2(190, -118), V2(290, -140) } },
 	{ name = "Seestrasse", kind = "minor", hw = 6.5, tStart = true, pts = {
-		V2(-360, -422), V2(-335, -350), V2(-305, -300) } },
+		V2(-360, -422), V2(-340, -400), V2(-320, -370), V2(-305, -352) } },
 	{ name = "Muehlegasse", kind = "minor", hw = 6.5, tStart = true, pts = {
-		V2(-210, -335), V2(-215, -420), V2(-190, -500) } },
+		V2(-210, -335), V2(-160, -410), V2(-150, -500) } },
 	{ name = "Talweg", kind = "minor", hw = 6.5, tStart = true, pts = {
 		V2(30, 436), V2(22, 385), V2(40, 335) } },
 	{ name = "Bachstrasse", kind = "minor", hw = 6.5, tStart = true, pts = {
@@ -257,22 +258,23 @@ local ROADS = {
 	{ name = "Passstrasse", kind = "pass", hw = 7.5, tStart = true, topH = 215, pts = {
 		V2(500, 486), V2(455, 545), V2(380, 590), V2(455, 650), V2(355, 705), V2(440, 765), V2(350, 815) } },
 	-- NEUE LAND- UND BERGSTRASSEN
-	{ name = "Seerandstrasse", kind = "main", hw = 8, tStart = true, tEnd = true, pts = {
-		V2(-210, -335), V2(-150, -250), V2(-80, -160), V2(-30, -60), V2(20, 20), V2(70, 90), V2(80, 150), V2(90, 170) } },
+	-- Seerandstrasse wurde entfernt: sie lief ab (-840, -1340) 455 Studs
+	-- deckungsgleich auf der Westtalstrasse (0 Grad) und erzeugte dort einen
+	-- durchgehenden doppelten Asphaltstreifen samt doppeltem Trottoir.
 	{ name = "Panoramastrasse", kind = "pass", hw = 7, tStart = true, pts = {
 		V2(500, 486), V2(560, 530), V2(610, 570), V2(555, 615), V2(615, 660), V2(560, 700), V2(635, 745), V2(720, 775) } },
 	{ name = "Bergstrasse Nord", kind = "pass", hw = 6.5, tStart = true, pts = {
 		V2(330, -310), V2(390, -350), V2(430, -400), V2(380, -450), V2(435, -505), V2(395, -560), V2(455, -620) } },
 	{ name = "Waldstrasse", kind = "minor", hw = 6, tStart = true, pts = {
-		V2(-305, -300), V2(-370, -265), V2(-440, -250), V2(-510, -265), V2(-580, -290), V2(-660, -300) } },
-	{ name = "Hofweg Nord", kind = "minor", hw = 5.5, tStart = true, pts = {
-		V2(-360, -422), V2(-390, -360), V2(-345, -300), V2(-300, -252), V2(-250, -225) } },
+		V2(-305, -352), V2(-375, -340), V2(-445, -352), V2(-515, -338), V2(-585, -352), V2(-660, -358) } },
 	{ name = "Hofweg Sued", kind = "minor", hw = 5.5, tStart = true, pts = {
 		V2(-220, 385), V2(-265, 330), V2(-240, 270), V2(-305, 235), V2(-370, 215) } },
 	{ name = "Westtalstrasse", kind = "main", hw = 8, tStart = true, tEnd = true, pts = {
-		V2(-60, 418), V2(-125, 330), V2(-165, 215), V2(-145, 95), V2(-125, -40), V2(-100, -180), V2(-70, -292) } },
+		V2(-60, 418), V2(-125, 330), V2(-165, 215), V2(-145, 95), V2(-125, -40), V2(-100, -180), V2(-210, -335) } },
 	{ name = "Doenerweg", kind = "minor", hw = 7, tStart = true, pts = {
 		V2(80, -130), V2(110, -158), V2(128, -185), V2(138, -208), V2(140, -232) } },
+	-- Luftige Dorf-Ringe/Querverbindungen wurden entfernt: sie verbanden zwei
+	-- Punkte derselben Strasse und erzeugten dadurch Dreiecksinseln.
 }
 
 -- Alle Strassenpunkte auf die 4x-Welt skalieren (Breiten bleiben realistisch).
@@ -285,13 +287,69 @@ for _, def in ipairs(ROADS) do
 	end
 end
 
-local ROADLIST, ALLPTS, rdhash = {}, {}, {}
-local TJ = {}   -- Einmuendungen (damit dort keine Randlinien durchlaufen)
+----------------------------------------------------------------
+-- KIT-NETZ (2026-11-17): die Strassen bestehen AUSSCHLIESSLICH aus den
+-- gelieferten Strassen-Einzelobjekten (8x8-m-Kacheln, 1 m = 3 Studs).
+-- Damit das geht, ist das Netz rechtwinklig: alle Kanten laufen N/S/O/W,
+-- Ecken sind 90-Grad-Kurven, Kreuzungen T- oder 4-Weg-Teile.
+-- Hauptstrassen: hw 9  -> 1.5x Massstab (Kachel 36 Studs, Fahrbahn 18)
+-- Dorfstrassen:  hw 6  -> 1.0x Massstab (Kachel 24 Studs, Fahrbahn 12)
+-- Knoetige Punkte liegen auf dem 72-Studs-Raster (2 Haupt- = 3 Neben-Kacheln).
+----------------------------------------------------------------
+local KIT_ROADS = true
+local ROADS = {
+	-- ================= HAUPTSTRASSEN (Kachel 36) =================
+	{ name = "Hauptstrasse West", kind = "main", hw = 9, pts = {
+		V2(-2952, -1296), V2(216, -1296) } },
+	{ name = "Hauptstrasse Sued", kind = "main", hw = 9, pts = {
+		V2(216, -1296), V2(216, -1098) } },
+	{ name = "Hauptstrasse Ost", kind = "main", hw = 9, pts = {
+		V2(306, -1008), V2(2952, -1008) } },
+	{ name = "Verbindung", kind = "main", hw = 9, pts = {
+		V2(216, -918), V2(216, 1710), V2(504, 1710) } },
+	{ name = "Talstrasse West", kind = "main", hw = 9, pts = {
+		V2(414, 1800), V2(-1512, 1800) } },
+	{ name = "Talstrasse Ost", kind = "main", hw = 9, pts = {
+		V2(594, 1800), V2(2952, 1800) } },
+	-- ================= DORFSTRASSEN (Kachel 24) =================
+	{ name = "Bahnhofstrasse", kind = "minor", hw = 6, pts = {
+		V2(216, -1152), V2(504, -1152), V2(504, -864) } },
+	{ name = "Moosweg", kind = "minor", hw = 6, pts = {
+		V2(504, -864), V2(216, -864) } },
+	{ name = "Kirchweg", kind = "minor", hw = 6, pts = {
+		V2(432, -1008), V2(432, -1152) } },
+	{ name = "Doenerweg", kind = "minor", hw = 6, pts = {
+		V2(360, -864), V2(360, -780) } },
+	{ name = "Schulhausweg", kind = "minor", hw = 6, pts = {
+		V2(216, -720), V2(360, -720) } },
+	{ name = "Seedorfstrasse", kind = "minor", hw = 6, pts = {
+		V2(-1008, -1296), V2(-1008, -1776) } },
+	{ name = "Muehlegasse", kind = "minor", hw = 6, pts = {
+		V2(-1296, -1296), V2(-1296, -1656), V2(-1008, -1656) } },
+	{ name = "Seerandstrasse", kind = "minor", hw = 6, pts = {
+		V2(-720, -1296), V2(-720, -1656) } },
+	{ name = "Waldstrasse", kind = "minor", hw = 6, pts = {
+		V2(-1008, -1776), V2(-432, -1776) } },
+	{ name = "Dorfplatz", kind = "minor", hw = 6, pts = {
+		V2(144, 1800), V2(144, 1884) } },
+	{ name = "Talweg", kind = "minor", hw = 6, pts = {
+		V2(648, 1800), V2(648, 1656) } },
+	{ name = "Bachstrasse", kind = "minor", hw = 6, pts = {
+		V2(288, 1800), V2(288, 1944), V2(720, 1944) } },
+	-- ================= BERGSTRASSEN (Kachel 24) =================
+	{ name = "Passstrasse", kind = "pass", hw = 6, topH = 215, pts = {
+		V2(2160, 1800), V2(2160, 2088), V2(1440, 2088), V2(1440, 2376),
+		V2(2016, 2376), V2(2016, 2664) } },
+	{ name = "Panoramastrasse", kind = "pass", hw = 6, topH = 250, pts = {
+		V2(2016, 2664), V2(2736, 2664), V2(2736, 2952) } },
+}
+
+local ROADLIST, ALLPTS, rdhash = {}, {}, {}local TJ = {}   -- Einmuendungen (damit dort keine Randlinien durchlaufen)
 
 local function roadQuery(x, z)
 	local best, bd, cx, cz = hnearest(rdhash, x, z)
 	if not best then return nil end
-	local sw, sh = 0, 0
+	local sw, sh, sdx, sdz = 0, 0, 0, 0
 	for a = cx - 1, cx + 1 do
 		for b = cz - 1, cz + 1 do
 			local t = rdhash[a * 64 + b]
@@ -302,12 +360,19 @@ local function roadQuery(x, z)
 						local w = 1 - (d - bd) / 12
 						sw = sw + w
 						sh = sh + w * p[3]
+						sdx = sdx + w * (p[5] or 0)
+						sdz = sdz + w * (p[6] or 0)
 					end
 				end
 			end
 		end
 	end
-	return bd, sh / sw, best[4]
+	-- Tangente der NAECHSTEN Strasse (nicht der Mittelwert): an Punkten, wo
+	-- drei Strassen zusammentreffen, waere der Mittelwert eine Zufallsrichtung
+	-- und wuerde die Einmuendung in die Wiese schieben.
+	local tx, tz = best[5], best[6]
+	if (tx == nil) or (tx * tx + tz * tz < 0.5) then tx, tz = sdx / sw, sdz / sw end
+	return bd, sh / sw, best[4], tx, tz
 end
 local function roadDist(x, z)
 	local d = roadQuery(x, z)
@@ -319,23 +384,27 @@ local function addRoad(def)
 	for i, p in ipairs(def.pts) do pts[i] = p end
 	local n0 = #pts
 	for _, rb in ipairs(RBS) do
+		-- Task 49: Zufahrten enden exakt bei Rout + 1, damit der Kreisel wie ein Knoten wirkt
 		if pts[1] == rb.c then
-			pts[1] = rb.c + (pts[2] - rb.c).Unit * (rb.Rout - 1.5)
+			pts[1] = rb.c + (pts[2] - rb.c).Unit * (rb.Rout + 1)
 			def.rbStart = rb
 		end
 		if pts[n0] == rb.c then
-			pts[n0] = rb.c + (pts[n0 - 1] - rb.c).Unit * (rb.Rout - 1.5)
+			pts[n0] = rb.c + (pts[n0 - 1] - rb.c).Unit * (rb.Rout + 1)
 			def.rbEnd = rb
 		end
 	end
 	local startH
 	local endH = def.endH
 	def.stops = {}
+	-- Einmuendung: die Strasse endet exakt auf der Querstrasse. Der Knoten
+	-- bekommt spaeter einen Radius, der die Ueberlappung der beiden Baender
+	-- vollstaendig abdeckt (kein Dreiecksfetzen, kein Knick, kein Stummel).
 	if def.tStart then
-		local d, h, hw0 = roadQuery(pts[1].X, pts[1].Y)
-		if d then
-			TJ[#TJ + 1] = { pts[1].X, pts[1].Y }
+		local d, h, hw0, tdx, tdz = roadQuery(pts[1].X, pts[1].Y)
+		if d and d < 16 then
 			local dir = (pts[2] - pts[1]).Unit
+			TJ[#TJ + 1] = { pts[1].X, pts[1].Y, r = hw0 + 3.0, h = h, dx = dir.X, dz = dir.Y, hw = hw0 }
 			pts[1] = pts[1] + dir * (hw0 - 0.5)
 			startH = h
 			def.stops[#def.stops + 1] = { pos = pts[1], dir = dir, which = "start" }
@@ -343,25 +412,62 @@ local function addRoad(def)
 	end
 	if def.tEnd then
 		local n = #pts
-		local d, h, hw0 = roadQuery(pts[n].X, pts[n].Y)
-		if d then
-			TJ[#TJ + 1] = { pts[n].X, pts[n].Y }
+		local d, h, hw0, tdx, tdz = roadQuery(pts[n].X, pts[n].Y)
+		if d and d < 16 then
 			local dir = (pts[n - 1] - pts[n]).Unit
+			TJ[#TJ + 1] = { pts[n].X, pts[n].Y, r = hw0 + 3.0, h = h, dx = dir.X, dz = dir.Y, hw = hw0 }
 			pts[n] = pts[n] + dir * (hw0 - 0.5)
 			endH = h
 			def.stops[#def.stops + 1] = { pos = pts[n], dir = dir, which = "end" }
 		end
 	end
-	local P = spline(pts, def.step or 6)
-	-- Kein Asphalt im See: Punkte mit zu kleiner See-Distanz radial nach aussen schieben
-	for i, p in ipairs(P) do
-		local dcur = lakeD(p.X, p.Y)
-		if dcur < 1.34 then
+	local P
+	if KIT_ROADS then
+		-- rechtwinklige Polylinie: keine Spline-Glaettung, damit die Kacheln
+		-- exakt auf den Kanten liegen (Ecken bleiben scharf = Kurvenkachel)
+		P = {}
+		for i = 1, #pts - 1 do
+			local a, b = pts[i], pts[i + 1]
+			local L = (b - a).Magnitude
+			local steps = math.max(2, math.ceil(L / 6))
+			for s = 0, steps - 1 do P[#P + 1] = a + (b - a) * (s / steps) end
+		end
+		P[#P + 1] = pts[#pts]
+	else
+		P = spline(pts, def.step or 6)
+	end
+	-- Kein Asphalt im See. Wichtig: nur Punkte IM Wasser (l < 1) werden
+	-- verschoben, und der Verlauf wird danach geglaettet. Frueher wurde schon ab
+	-- l < 1.34 (inkl. Rauschanteil) geschoben: dadurch riss die Strasse 40-90
+	-- Studs lange Spruenge, die quer durch andere Strassen schnitten (= Dreiecke).
+	do
+		local moved = false
+		for i, p in ipairs(P) do
 			local ex, ez = (p.X - LAKE.x) / LAKE.rx, (p.Y - LAKE.z) / LAKE.rz
 			local l = math.sqrt(ex * ex + ez * ez)
-			if l > 0.001 then
-				local k = 1.36 / l
+			if l < 1.03 then
+				local k = 1.07 / math.max(l, 0.05)
 				P[i] = V2(LAKE.x + ex * LAKE.rx * k, LAKE.z + ez * LAKE.rz * k)
+				moved = true
+			end
+		end
+		if moved then
+			for _ = 1, 12 do
+				local nP = { P[1] }
+				for i = 2, #P - 1 do
+					local a, b, c = P[i - 1], P[i], P[i + 1]
+					nP[i] = V2((a.X + 2 * b.X + c.X) * 0.25, (a.Y + 2 * b.Y + c.Y) * 0.25)
+				end
+				nP[#P] = P[#P]
+				P = nP
+			end
+			for i, p in ipairs(P) do
+				local ex, ez = (p.X - LAKE.x) / LAKE.rx, (p.Y - LAKE.z) / LAKE.rz
+				local l = math.sqrt(ex * ex + ez * ez)
+				if l < 1.01 and l > 0.001 then
+					local k = 1.03 / l
+					P[i] = V2(LAKE.x + ex * LAKE.rx * k, LAKE.z + ez * LAKE.rz * k)
+				end
 			end
 		end
 	end
@@ -385,14 +491,77 @@ local function addRoad(def)
 		for j = 0, k - 1 do hs[n - j] = lerp(hs[n - j], endH, 1 - j / k) end
 	end
 	for i, p in ipairs(P) do
-		hadd(rdhash, p.X, p.Y, { p.X, p.Y, hs[i], def.hw })
+		local a, b = P[math.max(1, i - 1)], P[math.min(#P, i + 1)]
+		local vx, vz = b.X - a.X, b.Y - a.Y
+		local vl = math.sqrt(vx * vx + vz * vz)
+		if vl > 0.001 then vx, vz = vx / vl, vz / vl else vx, vz = 0, 1 end
+		hadd(rdhash, p.X, p.Y, { p.X, p.Y, hs[i], def.hw, vx, vz })
 		ALLPTS[#ALLPTS + 1] = { p.X, p.Y, hs[i], def.hw }
 	end
-	ROADLIST[#ROADLIST + 1] = { def = def, P = P, hs = hs }
+	ROADLIST[#ROADLIST + 1] = { def = def, P = P, hs = hs, pts = pts }
 end
 
 for _, def in ipairs(ROADS) do addRoad(def) end
 print("[Swiss Map] Strassen geplant")
+
+----------------------------------------------------------------
+-- KREUZUNGEN MITTEN IM VERLAUF: zwei Baender duerfen sich nicht einfach
+-- ueberlagern (das ergibt genau die Dreiecksfetzen). Jede Kreuzung wird
+-- aufgetrennt und als Knoten registriert.
+----------------------------------------------------------------
+local XNODES = {}
+do
+	local function segInt(a, b, c, d)
+		local r1x, r1z = b.X - a.X, b.Y - a.Y
+		local r2x, r2z = d.X - c.X, d.Y - c.Y
+		local den = r1x * r2z - r1z * r2x
+		if math.abs(den) < 1e-6 then return nil end
+		local t = ((c.X - a.X) * r2z - (c.Y - a.Y) * r2x) / den
+		local u = ((c.X - a.X) * r1z - (c.Y - a.Y) * r1x) / den
+		if t < 0.04 or t > 0.96 or u < 0.04 or u > 0.96 then return nil end
+		local ang = math.abs(math.atan2(den, r1x * r2x + r1z * r2z))
+		if ang > math.pi / 2 then ang = math.pi - ang end
+		-- Fast parallele Strassen (gemeinsamer Korridor) sind keine Kreuzung:
+		-- dort wuerde nur ein riesiger Asphaltfleck entstehen
+		if ang < math.rad(24) then return nil end
+		return a.X + r1x * t, a.Y + r1z * t, ang
+	end
+	local function insertAt(R, idx, x, z)
+		local h = (R.hs[idx] + R.hs[idx + 1]) * 0.5
+		table.insert(R.P, idx + 1, V2(x, z))
+		table.insert(R.hs, idx + 1, h)
+	end
+	for i = 1, #ROADLIST do
+		for j = i + 1, #ROADLIST do
+			local A, B = ROADLIST[i], ROADLIST[j]
+			for ia = #A.P - 1, 1, -1 do
+				for ib = #B.P - 1, 1, -1 do
+					local a0, a1 = A.P[ia], A.P[ia + 1]
+					local b0, b1 = B.P[ib], B.P[ib + 1]
+					local px, pz, ang = segInt(a0, a1, b0, b1)
+					if px then
+						local h = (A.hs[ia] + B.hs[ib]) * 0.5
+						insertAt(A, ia, px, pz)
+						insertAt(B, ib, px, pz)
+						XNODES[#XNODES + 1] = { x = px, z = pz, ang = ang,
+							hw = math.max(A.def.hw, B.def.hw), h = h,
+							ax = a1.X - a0.X, az = a1.Y - a0.Y,
+							bx = b1.X - b0.X, bz = b1.Y - b0.Y }
+					end
+				end
+			end
+		end
+	end
+end
+if #XNODES > 0 then
+	local mn, mx = 999, 0
+	for _, xn in ipairs(XNODES) do
+		local a = math.deg(xn.ang)
+		if a < mn then mn = a end
+		if a > mx then mx = a end
+	end
+	print(("[Netz] %d Kreuzungen aufgetrennt (Winkel %.0f..%.0f Grad)"):format(#XNODES, mn, mx))
+end
 
 ----------------------------------------------------------------
 -- DOENER LADEN + 15 GARAGEN (Planung, vor dem Terrain!)
@@ -472,13 +641,15 @@ do
 		warn(("[Swiss Map] Nur %d von %d Garagen-Plaetzen gefunden!"):format(#GARAGES, GARAGE_COUNT))
 	end
 end
--- Zufahrten (Mini-Strassen von der Garage zur naechsten Strasse)
-for _, g in ipairs(GARAGES) do
-	local a0 = V2(g.x + g.nx * GARAGE_APRON_END, g.z + g.nz * GARAGE_APRON_END)
-	local rp = g.road
-	local ex = V2(rp[1], rp[2]) + (V2(g.x, g.z) - V2(rp[1], rp[2])).Unit * (rp[4] + 0.5)
-	TJ[#TJ + 1] = { ex.X, ex.Y }
-	addRoad({ name = "Zufahrt " .. g.idx, kind = "drive", hw = 4.5, step = 5, endH = rp[3], pts = { a0, ex } })
+-- Zufahrten: entfallen im Kit-Netz (die Garagen stehen direkt an den Kacheln)
+if not KIT_ROADS then
+	for _, g in ipairs(GARAGES) do
+		local a0 = V2(g.x + g.nx * GARAGE_APRON_END, g.z + g.nz * GARAGE_APRON_END)
+		local rp = g.road
+		local ex = V2(rp[1], rp[2]) + (V2(g.x, g.z) - V2(rp[1], rp[2])).Unit * (rp[4] + 0.5)
+		TJ[#TJ + 1] = { ex.X, ex.Y }
+		addRoad({ name = "Zufahrt " .. g.idx, kind = "drive", hw = 4.5, step = 5, endH = rp[3], pts = { a0, ex } })
+	end
 end
 print(("[Swiss Map] %d Garagen geplant"):format(#GARAGES))
 
@@ -630,7 +801,7 @@ terrain.WaterWaveSize = 0.12
 -- Gras wiegt sich im Wind, aber kurz (nur auf Gras-Material, nie auf der Strasse)
 pcall(function() terrain.Decoration = true end)
 -- Kurzes, tiefes Gras: nur auf Gras-Material, nie auf Asphalt/Pavement.
-pcall(function() terrain.GrassLength = 0.05 end)
+pcall(function() terrain.GrassLength = 0.02 end)
 
 Lighting.ClockTime = 14
 Lighting.GeographicLatitude = 46.8
@@ -834,9 +1005,7 @@ local function lampPost(parent, x, y, z, towards)
 	part(parent, V3(1.9, 0.45, 1.9), CFrame.new(lx, y + 10.65, lz), dark, E.Metal, nil, false)
 	local glass = part(parent, V3(1.35, 1.25, 1.35), CFrame.new(lx, y + 9.85, lz), COL(255, 232, 180), E.Neon, nil, false, 0.35)
 	part(parent, V3(1.6, 0.35, 1.6), CFrame.new(lx, y + 9.15, lz), dark, E.Metal, nil, false)
-	local pl = Instance.new("PointLight")
-	pl.Range, pl.Brightness, pl.Color = 26, 0.9, COL(255, 224, 176)
-	pl.Parent = glass
+	-- Kein PointLight pro Laterne: 250 Lichter ruckeln den Viewport (nur Neon-Glas)
 end
 
 ----------------------------------------------------------------
@@ -845,8 +1014,14 @@ end
 local roadsF = folder("Strassen")
 local signsF = folder("Schilder")
 local lampsF = folder("Laternen")
-local ASPH = COL(62, 64, 70)
-local CONC = COL(158, 158, 154)
+-- RoadKit-Palette (uebernommen aus palette.mtl des gelieferten Kits)
+local ASPH = COL(58, 63, 71)
+local CONC = COL(154, 154, 148)
+local CURBD = COL(118, 123, 131)      -- curb_dark: dunkle Kante auf der Fahrbahn
+local KJOINT = COL(160, 164, 170)     -- joint: Fugen im Trottoir
+local KDRAIN = COL(38, 42, 48)        -- drain: Ablaufrinne
+local KMANHOLE = COL(74, 79, 87)      -- manhole: Schachtdeckel
+local KYEL = COL(232, 185, 60)        -- yellow: Markierung
 
 local function lineSeg(parent, a, b, y, w, color)
 	local pa, pb = V3(a.X, y, a.Y), V3(b.X, y, b.Y)
@@ -879,8 +1054,139 @@ local function tangent(P, i)
 end
 
 local ROAD_TOP = 0.15          -- Fahrbahnoberkante ueber dem gemessenen Terrain
-local CURB = COL(174, 172, 166)
-local SIDEW = COL(190, 186, 178)
+local CURB = COL(140, 145, 153)
+local SIDEW = COL(184, 188, 194)
+
+----------------------------------------------------------------
+-- ROAD-KIT: gelieferte Strassen-Modelle (8x8-m-Raster, 1 m = 3 Studs)
+-- Vorlagen werden nach ReplicatedStorage.RoadKit verschoben und von dort geklont.
+----------------------------------------------------------------
+local KIT_S = 3.0
+local KITS = {}
+local KIT_OFF = {}
+do
+	local rs = game:GetService("ReplicatedStorage")
+	-- Vorlagen sammeln: Modelle ODER einzelne MeshParts, Namen mit " (1)"-Suffix
+	-- werden normalisiert. Beim Import vergibt Studio manchmal solche Namen.
+	local function collect(f)
+		local n = 0
+		for _, c in ipairs(f:GetChildren()) do
+			local nm = string.gsub(c.Name, "%s*%(%d+%)$", "")
+			if (c:IsA("Model") or c:IsA("BasePart")) and (string.find(nm, "^Road_") or string.find(nm, "^Bridge_")) then
+				KITS[nm] = c
+				if c:IsA("Model") then
+					local bbcf, bbs = c:GetBoundingBox()
+					KIT_OFF[nm] = (0 - (bbcf.Position.Y - bbs.Y / 2)) - bbs.Y / 2
+				else
+					KIT_OFF[nm] = (0 - (c.Position.Y - c.Size.Y / 2)) - c.Size.Y / 2
+				end
+				n = n + 1
+			end
+		end
+		return n
+	end
+	local holder = rs:FindFirstChild("RoadKit") or workspace:FindFirstChild("RoadKit")
+	local n = 0
+	if holder then
+		n = collect(holder)
+	else
+		n = collect(workspace)
+	end
+	for _, c in pairs(KITS) do
+		for _, d in ipairs(c:GetDescendants()) do
+			if d:IsA("BasePart") then
+				d.Anchored = true
+				d.CanCollide = false
+				d.CastShadow = false
+			end
+		end
+		if c:IsA("BasePart") then
+			c.Anchored = true
+			c.CanCollide = false
+			c.CastShadow = false
+		end
+	end
+	if n > 0 then
+		print(("[Swiss Map] RoadKit: %d Vorlagen"):format(n))
+	else
+		warn("[Swiss Map] RoadKit fehlt (0 Vorlagen) - prozedurale Strassen aktiv")
+	end
+end
+
+local kitCount = 0
+local function kitTile(parent, name, px, pz, y, yaw, scale)
+	local tpl = KITS[name]
+	if not tpl then return nil end
+	local s = scale or KIT_S
+	local m = tpl:Clone()
+	local parts = {}
+	if m:IsA("BasePart") then
+		parts[1] = m
+	else
+		for _, d in ipairs(m:GetDescendants()) do
+			if d:IsA("BasePart") then parts[#parts + 1] = d end
+		end
+	end
+	for _, d in ipairs(parts) do
+		d.Size = d.Size * s
+		d.Anchored = true
+		d.CanCollide = false
+		d.CastShadow = false
+	end
+	local off = (KIT_OFF[name] or 0) * s
+	m:PivotTo(CFrame.new(px, y - off, pz) * CFrame.Angles(0, yaw, 0))
+	m.Name = name
+	m.Parent = parent
+	kitCount = kitCount + 1
+	pace(120)
+	return m
+end
+
+-- Kacheln laengs einer Strasse verlegen: 8-m-Raster, 10 % Ueberlappung damit
+-- in weichen Boegen keine Fugen aufgehen, jede Kachel einzeln aufs Terrain.
+-- In engen Ecken wird die echte 90-Grad-Kachel gesetzt (gespiegelt bei Rechts-
+-- kurven), weil sie nur 9 Studs Radius hat und sonst die Ecke abschneidet.
+local function pathAt(P, s)
+	local acc = 0
+	for i = 1, #P - 1 do
+		local ax, az = P[i].X, P[i].Y
+		local bx, bz = P[i + 1].X, P[i + 1].Y
+		local dx, dz = bx - ax, bz - az
+		local L = math.sqrt(dx * dx + dz * dz)
+		if L > 0.01 then
+			if acc + L >= s or i == #P - 1 then
+				local t = math.clamp((s - acc) / L, 0, 1)
+				local l = math.max(L, 0.001)
+				return ax + dx * t, az + dz * t, dx / l, dz / l
+			end
+			acc = acc + L
+		end
+	end
+	return P[#P].X, P[#P].Y, 0, 1
+end
+
+local function layKitTiles(parent, P, hw, filter)
+	if not KITS["Road_Straight_8x8"] then return end
+	local scale = hw / 2                       -- Kit-Fahrbahn 4 m -> 2*hw Studs
+	local tileLen = 8 * scale
+	local step = tileLen * 0.9
+	local total = 0
+	for i = 1, #P - 1 do
+		local dx, dz = P[i + 1].X - P[i].X, P[i + 1].Y - P[i].Y
+		total = total + math.sqrt(dx * dx + dz * dz)
+	end
+	local s = tileLen * 0.5
+	local flip = 0
+	while s < total - tileLen * 0.45 do
+		local px, pz, hx, hz = pathAt(P, s)
+		if (not filter) or filter(px, pz) then
+			local y = surfY(px, pz) + ROAD_TOP + 0.02 + (flip % 2) * 0.03
+			kitTile(parent, "Road_Straight_8x8", px, pz, y, math.atan2(hx, hz), scale)
+			flip = flip + 1
+		end
+		s = s + step
+	end
+end
 
 -- Echte Terrain-Oberflaeche je Strassenpunkt (Raycast) und geglaettet
 local function roadSurface(P, hs)
@@ -892,64 +1198,351 @@ local function roadSurface(P, hs)
 	return ty
 end
 
+-- Knoten-Registry (Task 47): TJ-Eintraege < 6 Studs zu einem Knoten zusammenfassen
+local NODES = {}
+do
+	-- Endpunkte, an denen zwei Strassen aufeinandertreffen, bekommen IMMER einen
+	-- Knoten – unabhaengig von der Reihenfolge im ROADS-Array. Sonst laufen zwei
+	-- Asphaltbaender deckungsgleich nebeneinander und der Randstein des einen
+	-- schneidet quer durch den anderen (= sichtbares Dreieck).
+	do
+		local ends = {}
+		for _, R in ipairs(ROADLIST) do
+			local P2, n2 = R.P, #R.P
+			if n2 >= 2 then
+				ends[#ends + 1] = { x = P2[1].X, z = P2[1].Y, hw = R.def.hw, road = R.def.name,
+					dx = P2[2].X - P2[1].X, dz = P2[2].Y - P2[1].Y, rb = R.def.rbStart }
+				ends[#ends + 1] = { x = P2[n2].X, z = P2[n2].Y, hw = R.def.hw, road = R.def.name,
+					dx = P2[n2 - 1].X - P2[n2].X, dz = P2[n2 - 1].Y - P2[n2].Y, rb = R.def.rbEnd }
+			end
+		end
+		for i = 1, #ends - 1 do
+			local a = ends[i]
+			if not a.rb then
+				for k = i + 1, #ends do
+					local b = ends[k]
+					if not b.rb and b.road ~= a.road and dist2(a.x, a.z, b.x, b.z) < 14 then
+						local cx, cz = (a.x + b.x) / 2, (a.z + b.z) / 2
+						local hw0 = math.max(a.hw, b.hw)
+						TJ[#TJ + 1] = { cx, cz, r = hw0 + 3.0, dx = a.dx, dz = a.dz, hw = a.hw }
+						TJ[#TJ + 1] = { cx, cz, r = hw0 + 3.0, dx = b.dx, dz = b.dz, hw = b.hw }
+					end
+				end
+			end
+		end
+	end
+	for _, t in ipairs(TJ) do
+		local x, z = t[1], t[2]
+		local r = t.r or 10
+		local h = t.h
+		if h == nil then h = surfY(x, z) end
+		-- Kein Knoten direkt am Kreisel: dort deckt die Ringflaeche den Anschluss
+		local onRB = false
+		for _, rb in ipairs(RBS) do
+			if dist2(x, z, rb.c.X, rb.c.Y) < rb.Rout + 6 then onRB = true; break end
+		end
+		if onRB then continue end
+		local hw = t.hw or 5
+		local dx, dz = t.dx or 0, t.dz or 0
+		local found = nil
+		for _, nd in ipairs(NODES) do
+			if dist2(x, z, nd.x, nd.z) < 14 then found = nd; break end
+		end
+		if found then
+			local n = found.n + 1
+			found.hsum = found.hsum + h
+			found.h = found.hsum / n
+			found.n = n
+			if r > found.r then found.r = r end
+			found.arms[#found.arms + 1] = { dx = dx, dz = dz, hw = hw }
+		else
+			NODES[#NODES + 1] = { x = x, z = z, r = r, h = h, hsum = h, n = 1,
+				arms = { { dx = dx, dz = dz, hw = hw } } }
+		end
+	end
+	-- Kreuzungen aus dem Auftrenn-Durchlauf: Radius so gross, dass die beiden
+	-- Baender vollstaendig in der Knotenflaeche enden
+	for _, xn in ipairs(XNODES) do
+		local r = xn.hw + 3
+		if xn.ang < math.rad(55) then
+			r = math.max(r, xn.hw / math.max(0.35, math.sin(xn.ang / 2)))
+		end
+		r = math.min(r, xn.hw * 1.9)
+		local found = nil
+		for _, nd in ipairs(NODES) do
+			if dist2(xn.x, xn.z, nd.x, nd.z) < 8 then found = nd; break end
+		end
+		if found then
+			if r > found.r then found.r = r end
+			found.arms[#found.arms + 1] = { dx = xn.ax, dz = xn.az, hw = xn.hw }
+			found.arms[#found.arms + 1] = { dx = xn.bx, dz = xn.bz, hw = xn.hw }
+		else
+			NODES[#NODES + 1] = { x = xn.x, z = xn.z, r = r, h = xn.h, hsum = xn.h, n = 1,
+				arms = { { dx = xn.ax, dz = xn.az, hw = xn.hw }, { dx = xn.bx, dz = xn.bz, hw = xn.hw } } }
+		end
+	end
+	-- Knoten, deren Flaechen sich ueberlappen, zu einem zusammenfassen
+	-- (sonst entstehen zwei Asphaltscheiben uebereinander = "Achter")
+	local merged = true
+	while merged do
+		merged = false
+		for i = 1, #NODES do
+			for j = #NODES, i + 1, -1 do
+				local a, b = NODES[i], NODES[j]
+				local d = math.sqrt(dist2(a.x, a.z, b.x, b.z))
+				if d < math.max(a.r, b.r) * 0.85 then
+					local w = a.n + b.n
+					a.hsum = a.hsum + b.hsum
+					a.n = w
+					a.h = a.hsum / w
+					a.r = math.max(a.r, b.r)
+					for _, arm in ipairs(b.arms) do a.arms[#a.arms + 1] = arm end
+					table.remove(NODES, j)
+					merged = true
+				end
+			end
+		end
+	end
+	-- doppelte Arme entfernen (gleiche Richtung, gleiche Breite)
+	for _, nd in ipairs(NODES) do
+		local keep = {}
+		for _, arm in ipairs(nd.arms) do
+			local l = math.sqrt((arm.dx or 0) ^ 2 + (arm.dz or 0) ^ 2)
+			local dup = false
+			if l > 0.001 then
+				for _, k in ipairs(keep) do
+					local kl = math.sqrt((k.dx or 0) ^ 2 + (k.dz or 0) ^ 2)
+					if kl > 0.001 then
+						local c = ((arm.dx * k.dx + arm.dz * k.dz) / (l * kl))
+						if c > 0.985 then dup = true; break end
+					end
+				end
+			end
+			if not dup then keep[#keep + 1] = arm end
+		end
+		nd.arms = keep
+	end
+	-- Knotenradius so gross, dass sich die Baender nicht AUSSERHALB der Flaeche
+	-- ueberlagern. Bei flachem Winkel waechst die Ueberlappung mit 1/sin(a/2);
+	-- ohne das bliebe genau der Dreiecksfetzen neben der Kreuzung stehen.
+	for _, nd in ipairs(NODES) do
+		local hwMax = 0
+		for _, arm in ipairs(nd.arms) do
+			if (arm.hw or 0) > hwMax then hwMax = arm.hw end
+		end
+		if hwMax > 0 then
+			local minAng = math.pi
+			for i = 1, #nd.arms - 1 do
+				local a1 = nd.arms[i]
+				local l1 = math.sqrt((a1.dx or 0) ^ 2 + (a1.dz or 0) ^ 2)
+				if l1 > 0.001 then
+					for k = i + 1, #nd.arms do
+						local a2 = nd.arms[k]
+						local l2 = math.sqrt((a2.dx or 0) ^ 2 + (a2.dz or 0) ^ 2)
+						if l2 > 0.001 then
+							local c = math.clamp((a1.dx * a2.dx + a1.dz * a2.dz) / (l1 * l2), -1, 1)
+							local ang = math.acos(c)
+							if ang < minAng then minAng = ang end
+						end
+					end
+				end
+			end
+			if minAng < math.pi then
+				local need = hwMax / math.max(0.22, math.sin(minAng / 2))
+				local want = math.clamp(need, hwMax + 3, hwMax * 2.2)
+				if want > nd.r then nd.r = want end
+			end
+		end
+	end
+end
+local function insideNode(x, z)
+	for _, nd in ipairs(NODES) do
+		if dist2(x, z, nd.x, nd.z) < nd.r then return nd end
+	end
+	return nil
+end
+local function nearNode(x, z, extra)
+	for _, nd in ipairs(NODES) do
+		if dist2(x, z, nd.x, nd.z) < nd.r + extra then
+			return true
+		end
+	end
+	return false
+end
+local function nearestNode(x, z, maxD)
+	local best, bd = nil, maxD or math.huge
+	for _, nd in ipairs(NODES) do
+		local d = dist2(x, z, nd.x, nd.z)
+		if d < bd then
+			bd = d
+			best = nd
+		end
+	end
+	return best
+end
+-- Schnittpunkte eines Segments mit den Knotenkreisen: liefert die t-Bereiche,
+-- die INNERHALB eines Knotens liegen. Nur so koennen Randstein und Trottoir
+-- exakt am Knotenrand enden statt quer durch die Kreuzung zu laufen.
+local function nodeCuts(ax, az, bx, bz)
+	local dx, dz = bx - ax, bz - az
+	local A = dx * dx + dz * dz
+	if A < 1e-6 then return {} end
+	local cuts = {}
+	for _, nd in ipairs(NODES) do
+		local fx, fz = ax - nd.x, az - nd.z
+		local B = 2 * (fx * dx + fz * dz)
+		local C = fx * fx + fz * fz - nd.r * nd.r
+		local disc = B * B - 4 * A * C
+		if disc > 0 then
+			local s = math.sqrt(disc)
+			local t1 = (-B - s) / (2 * A)
+			local t2 = (-B + s) / (2 * A)
+			local lo, hi = math.max(0, t1), math.min(1, t2)
+			if hi - lo > 0.0005 then cuts[#cuts + 1] = { lo, hi } end
+		end
+	end
+	table.sort(cuts, function(p, q) return p[1] < q[1] end)
+	return cuts
+end
+
 for _, R in ipairs(ROADLIST) do
 	local def, P, hs = R.def, R.P, R.hs
 	local hw, n = def.hw, #R.P
 	local F = folder(def.name, roadsF)
 	local ty = roadSurface(P, hs)
-	-- Fahrbahn + Randstein + Trottoir (alles bündig auf dem Terrain)
+	if not KIT_ROADS then
+	-- Fahrbahn + Randstein + Trottoir im Kit-Querschnitt (buendig auf dem Terrain)
+	local acc = 0
 	for i = 1, n - 1 do
-		local a = V3(P[i].X, ty[i], P[i].Y)
-		local b = V3(P[i + 1].X, ty[i + 1], P[i + 1].Y)
-		local len = (b - a).Magnitude
-		if len > 0.1 then
-			local cf = CFrame.lookAt((a + b) / 2, b)
-			part(F, V3(2 * hw, 2.4, len + 1.2), cf * CFrame.new(0, ROAD_TOP - 1.2, 0), ASPH, E.Asphalt)
-			local mid = V2((P[i].X + P[i + 1].X) / 2, (P[i].Y + P[i + 1].Y) / 2)
-			if inVillage(mid.X, mid.Y) and not nearTJ(mid.X, mid.Y, 15) and not nearRB(mid.X, mid.Y, 8) then
+		local dxs, dzs = P[i + 1].X - P[i].X, P[i + 1].Y - P[i].Y
+		local full = math.sqrt(dxs * dxs + dzs * dzs)
+		if full > 0.1 then
+			local cuts = nodeCuts(P[i].X, P[i].Y, P[i + 1].X, P[i + 1].Y)
+			local spans, tt = {}, 0
+			for _, c in ipairs(cuts) do
+				if c[1] > tt then spans[#spans + 1] = { tt, c[1] } end
+				if c[2] > tt then tt = c[2] end
+			end
+			if tt < 1 then spans[#spans + 1] = { tt, 1 } end
+			for _, sp in ipairs(spans) do
+			local t0, t1 = sp[1], sp[2]
+			local len = full * (t1 - t0)
+			if len > 0.1 then
+			local accSpan = acc + full * t0
+			local a = V3(P[i].X + dxs * t0, ty[i] + (ty[i + 1] - ty[i]) * t0, P[i].Y + dzs * t0)
+			local b = V3(P[i].X + dxs * t1, ty[i] + (ty[i + 1] - ty[i]) * t1, P[i].Y + dzs * t1)
+			local mid = V2((a.X + b.X) / 2, (a.Z + b.Z) / 2)
+			if insideNode(mid.X, mid.Y) == nil then
+				local ext0 = (t0 <= 0.0001) and 0.6 or 0
+				local ext1 = (t1 >= 0.9999) and 0.6 or 0
+				local plen = len + ext0 + ext1
+				local cf = CFrame.lookAt((a + b) / 2, b) * CFrame.new(0, 0, (ext1 - ext0) * 0.5)
 				local dir = b - a
 				local yaw2 = math.atan2(dir.X, dir.Z)
-				local roadTop = (ty[i] + ty[i + 1]) / 2 + ROAD_TOP
-				for _, sx in ipairs({ -1, 1 }) do
-					local sw = (cf * CFrame.new(sx * (hw + 1.75), 0, 0)).Position
-					local st = math.max(surfY(sw.X, sw.Z) + 0.22, roadTop + 0.05)
-					part(F, V3(2.5, 1.9, len + 1.2), CFrame.new(sw.X, st - 0.95, sw.Z) * CFrame.Angles(0, yaw2, 0), SIDEW, E.Cobblestone)
-					local cb = (cf * CFrame.new(sx * (hw + 0.25), 0, 0)).Position
-					part(F, V3(0.5, 0.9, len + 1.2), CFrame.new(cb.X, st - 0.45, cb.Z) * CFrame.Angles(0, yaw2, 0), CURB, E.Concrete)
+				-- Doerfliche Nebenstrassen: echte RoadKit-Kacheln STATT der alten
+				-- prozeduralen Platte (nicht darueber) - sobald die Modelle im Place
+				-- sind, ersetzt das Kit die alten Strassen vollstaendig.
+				local kitRoad = KITS["Road_Straight_8x8"] ~= nil
+					and def.kind == "minor" and hw <= 6.8
+					and inVillage(mid.X, mid.Y) and not nearRB(mid.X, mid.Y, 6)
+				if not kitRoad then
+					part(F, V3(2 * hw, 2.4, plen), cf * CFrame.new(0, ROAD_TOP - 1.2, 0), ASPH, E.Asphalt)
+				end
+				if not kitRoad then
+					if inVillage(mid.X, mid.Y) and not nearRB(mid.X, mid.Y, 3.2) then
+						local roadTop = (a.Y + b.Y) / 2 + ROAD_TOP
+						for _, sx in ipairs({ -1, 1 }) do
+							-- Kit: dunkle Kante (curb_dark) auf der Fahrbahn
+							part(F, V3(0.22, 0.1, plen), cf * CFrame.new(sx * (hw - 0.11), ROAD_TOP + 0.03, 0), CURBD, E.Concrete)
+							-- Trottoir
+							local sw = (cf * CFrame.new(sx * (hw + 1.6), 0, 0)).Position
+							local st = math.max(surfY(sw.X, sw.Z) + 0.22, roadTop + 0.05)
+							part(F, V3(2.5, 1.9, plen), CFrame.new(sw.X, st - 0.95, sw.Z) * CFrame.Angles(0, yaw2, 0), SIDEW, E.Cobblestone)
+							-- Kit: Randstein 0.3 breit (curb)
+							local cb = (cf * CFrame.new(sx * (hw + 0.15), 0, 0)).Position
+							part(F, V3(0.3, 0.9, plen), CFrame.new(cb.X, st - 0.45, cb.Z) * CFrame.Angles(0, yaw2, 0), CURB, E.Concrete)
+						end
+						-- Kit: Trottoir-Fugen alle 2 Studs (joint)
+						if math.floor((accSpan + 0.001) / 2) < math.floor((accSpan + len) / 2) then
+							for _, sx in ipairs({ -1, 1 }) do
+								local jp = (cf * CFrame.new(sx * (hw + 1.6), 0, 0)).Position
+								local jt = math.max(surfY(jp.X, jp.Z) + 0.24, roadTop + 0.07)
+								part(F, V3(2.5, 0.06, 0.1), CFrame.new(jp.X, jt, jp.Z) * CFrame.Angles(0, yaw2, 0), KJOINT, E.Concrete)
+							end
+						end
+						-- Kit: Ablaufrinnen alle 12 Studs am Randstein (drain)
+						if math.floor((accSpan + 0.001) / 12) < math.floor((accSpan + len) / 12) then
+							for _, sx in ipairs({ -1, 1 }) do
+								local dp = (cf * CFrame.new(sx * (hw - 0.8), 0, 0)).Position
+								part(F, V3(1.4, 0.08, 0.4), CFrame.new(dp.X, roadTop + 0.04, dp.Z) * CFrame.Angles(0, yaw2, 0), KDRAIN, E.Concrete)
+							end
+						end
+						-- Kit: Schachtdeckel alle 21 Studs (manhole)
+						if math.floor((accSpan + 0.001) / 21) < math.floor((accSpan + len) / 21) then
+							local mo = ((math.floor(accSpan / 21) % 2) == 0) and (-hw * 0.45) or (hw * 0.45)
+							local mp = (cf * CFrame.new(mo, 0, 0)).Position
+							part(F, V3(0.12, 2.0, 2.0), CFrame.new(mp.X, roadTop + 0.03, mp.Z) * UP, KMANHOLE, E.Concrete, CYL)
+						end
+					end
 				end
 			end
+			end
+			end
 		end
+		acc = acc + full
 	end
-	-- Markierungen
-	if def.kind == "main" or def.kind == "pass" then
+	-- Kit-Kacheln fuer Dorf-Nebenstrassen (folgen dem Verlauf, jede Kachel aufs Terrain)
+	if KITS["Road_Straight_8x8"] and def.kind == "minor" and hw <= 6.8 then
+		layKitTiles(F, P, hw, function(x, z)
+			return inVillage(x, z) and not nearRB(x, z, 6) and insideNode(x, z) == nil
+		end)
+	end
+	-- Markierungen (nur Hauptstrassen: Passstrassen liegen hoch am Berg und
+	-- wirkten als frei schwebende Striche am Himmel)
+	if def.kind == "main" then
 		for i = 3, n - 3, 2 do   -- gestrichelter Mittelstrich
-			if not nearRB(P[i].X, P[i].Y, 8) and not nearTJ(P[i].X, P[i].Y, 14) then
+			if not nearRB(P[i].X, P[i].Y, 8) and not nearNode(P[i].X, P[i].Y, 2) then
 				lineSeg(F, P[i], P[i + 1], (ty[i] + ty[i + 1]) / 2 + ROAD_TOP + 0.06, 0.45, WHITE)
 			end
 		end
 		for i = 2, n - 2, 2 do   -- durchgezogene Randlinien
 			local mid = P[i]
-			if not nearRB(mid.X, mid.Y, 6) and not nearTJ(mid.X, mid.Y, 13) then
+			if not nearRB(mid.X, mid.Y, 6) and not nearNode(mid.X, mid.Y, 2) then
 				local t1, t2 = tangent(P, i), tangent(P, i + 2)
 				local n1, n2 = V2(-t1.Y, t1.X), V2(-t2.Y, t2.X)
 				local y = (ty[i] + ty[i + 2]) / 2 + ROAD_TOP + 0.06
 				for _, s in ipairs({ -1, 1 }) do
-					lineSeg(F, P[i] + n1 * s * (hw - 1.1), P[i + 2] + n2 * s * (hw - 1.1), y, 0.35, WHITE)
+					lineSeg(F, P[i] + n1 * s * (hw - 0.55), P[i + 2] + n2 * s * (hw - 0.55), y, 0.2, WHITE)
 				end
 			end
 		end
 	end
-	-- Stop-Linie + Stopschild an Einmuendungen
+	-- Stop-Linie + Stopschild an Einmuendungen (Task 48: Linie bei r + 1.2, Schild im Gruenstreifen)
 	for _, st in ipairs(def.stops or {}) do
 		local d = st.dir
 		local right = V2(d.Y, -d.X)           -- rechte Seite des anfahrenden Fahrzeugs
-		local s0 = st.pos + d * 3.2
-		local idx = (st.which == "start") and 1 or n
-		local yy = ty[idx]
-		lineSeg(F, s0, s0 + right * hw, yy + ROAD_TOP + 0.07, 0.9, WHITE)
-		local sp = s0 + right * (hw + 2.6)
+		local nd = nearestNode(st.pos.X, st.pos.Y, 40)
+		local s0, hb
+		if nd then
+			s0 = V2(nd.x, nd.z) + d * (nd.r + 1.2)
+			hb = nd.h
+		else
+			s0 = st.pos + d * 3.2
+			local idx = (st.which == "start") and 1 or n
+			hb = ty[idx]
+		end
+		lineSeg(F, s0, s0 + right * hw, hb + ROAD_TOP + 0.07, 0.9, WHITE)
+		-- Kit: Zebrastreifen vor der Einmuendung (Crossing)
+		local nStripe = math.max(3, math.floor((2 * hw) / 2.4))
+		for k = 1, nStripe do
+			local o = -hw + (k - 0.5) * (2 * hw / nStripe)
+			local c1 = s0 - d * 4.0 + right * o
+			lineSeg(F, c1, c1 + d * 2.2, hb + ROAD_TOP + 0.07, 0.9, WHITE)
+		end
+		local sp = s0 + d * 1.2 + right * (hw + 3.9)
 		stopSign(signsF, sp.X, sp.Y, surfY(sp.X, sp.Y) + 0.34, d)
 	end
+	end  -- KIT_ROADS: prozeduraler Belag aus
 	-- Strassenlaternen im Dorf
 	if def.kind == "main" or def.kind == "minor" then
 		local side = 1
@@ -958,7 +1551,7 @@ for _, R in ipairs(ROADLIST) do
 			if inVillage(p.X, p.Y) and not nearRB(p.X, p.Y, 14) and not nearTJ(p.X, p.Y, 16) then
 				local t = tangent(P, s)
 				local nr = V2(-t.Y, t.X) * side
-				local lp = p + nr * (hw + 1.8)
+				local lp = p + nr * (hw + 3.9)
 				lampPost(lampsF, lp.X, surfY(lp.X, lp.Y) + 0.3, lp.Y, p)
 				side = -side
 			end
@@ -967,6 +1560,388 @@ for _, R in ipairs(ROADLIST) do
 	pace(1)
 end
 print("[Swiss Map] Strassen gebaut")
+
+----------------------------------------------------------------
+-- KIT-NETZ KOMPILIEREN: aus den rechtwinkligen Polylinien werden
+--   * Knotenstuecke (T / 4-Weg / 90-Grad-Kurve) an jedem Treffpunkt,
+--   * gerade Kachelreihen zwischen den Knoten (Fahrbahn + Trottoir kommen
+--     ausschliesslich aus den gelieferten Modellen).
+----------------------------------------------------------------
+local kitTilesTotal, kitCurves, kitJunc, kitMissing = 0, 0, 0, {}
+if KIT_ROADS then
+	local kF = folder("Kreuzungen", roadsF)
+
+	-- Sockets je Teil in Kachelkoordinaten (x, z)
+	local SOCK = {}
+	for _, nm in ipairs({ "Road_Straight_8x8", "Road_Straight_Edge_8x8", "Road_Straight_Approach_8x8",
+		"Road_Straight_Crosswalk_8x8", "Road_Straight_Arrows_8x8", "Road_Straight_Grass_8x8",
+		"Road_Straight_1Lane_8x8" }) do
+		SOCK[nm] = { { 0, 1 }, { 0, -1 } }
+	end
+	SOCK["Road_T_Junction_8x8"] = { { 1, 0 }, { -1, 0 }, { 0, -1 } }
+	SOCK["Road_4Way_Junction_8x8"] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
+	SOCK["Road_Curve90_8x8"] = { { 1, 0 }, { 0, -1 } }
+	SOCK["Road_Curve90_8x8_Mirror"] = { { -1, 0 }, { 0, -1 } }
+
+	local function rotDir(d, yaw)
+		local c, s = math.cos(yaw), math.sin(yaw)
+		return { d[1] * c + d[2] * s, -d[1] * s + d[2] * c }
+	end
+	local function yawFor(name, want)
+		local set = SOCK[name]
+		if not set or #set ~= #want then return nil end
+		for k = 0, 3 do
+			local yaw = k * math.pi / 2
+			local ok = true
+			for _, w in ipairs(want) do
+				local hit = false
+				for _, d in ipairs(set) do
+					local r = rotDir(d, yaw)
+					if math.abs(r[1] - w[1]) < 0.2 and math.abs(r[2] - w[2]) < 0.2 then hit = true; break end
+				end
+				if not hit then ok = false; break end
+			end
+			if ok then return yaw end
+		end
+		return nil
+	end
+
+	-- Kachel mit optionaler Laengsstreckung (kz): Pivot der Modelle liegt am
+	-- Kachelboden in der Mitte, deshalb ohne Hoehen-Offset.
+	local function kitPart(name, x, z, y, yaw, s, kz, parent)
+		local tpl = KITS[name]
+		if not tpl then
+			kitMissing[name] = (kitMissing[name] or 0) + 1
+			-- Platzhalter: gleiche Grundflaeche, damit das Raster bis zum Import
+			-- pruefbar bleibt. Wird nach dem Import automatisch ersetzt.
+			local ph = Instance.new("Part")
+			ph.Name = "PLATZHALTER_" .. name
+			ph.Anchored = true
+			ph.CanCollide = false
+			ph.CastShadow = false
+			ph.Material = Enum.Material.SmoothPlastic
+			ph.Color = COL(150, 152, 156)
+			ph.Size = Vector3.new(8 * s, 0.2, 8 * s * (kz or 1))
+			ph.CFrame = CFrame.new(x, y - 0.1, z) * CFrame.Angles(0, yaw, 0)
+			ph.Parent = parent or kF
+			return ph
+		end
+		local m = tpl:Clone()
+		local parts = {}
+		if m:IsA("BasePart") then parts[1] = m
+		else for _, d in ipairs(m:GetDescendants()) do if d:IsA("BasePart") then parts[#parts + 1] = d end end end
+		local piv = m:GetPivot()
+		local inv = piv:Inverse()
+		local k = kz or 1
+		for _, d in ipairs(parts) do
+			local rel = inv * d.CFrame
+			local p = rel.Position
+			d.Size = Vector3.new(d.Size.X * s, d.Size.Y * s, d.Size.Z * s * k)
+			d.CFrame = piv * CFrame.new(p.X * s, p.Y * s, p.Z * s * k) * rel.Rotation
+			d.Anchored = true
+			d.CanCollide = false
+			d.CastShadow = false
+		end
+		m:PivotTo(CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0))
+		m.Name = name
+		m.Parent = parent or kF
+		kitTilesTotal = kitTilesTotal + 1
+		pace(60)
+		return m
+	end
+
+	-- 1) Knoten sammeln (Ecken + Endpunkte), Richtungen merken
+	local nodes, order = {}, {}
+	local function nodeAt(x, z)
+		local k = math.floor(x / 2 + 0.5) * 2 .. "|" .. math.floor(z / 2 + 0.5) * 2
+		local nd = nodes[k]
+		if not nd then
+			nd = { x = x, z = z, dirs = {}, hw = 0, kind = "" }
+			nodes[k] = nd
+			order[#order + 1] = nd
+		end
+		return nd
+	end
+	local function addDir(nd, dx, dz, hw, kind)
+		local L = math.sqrt(dx * dx + dz * dz)
+		if L < 0.01 then return end
+		dx, dz = dx / L, dz / L
+		for _, d in ipairs(nd.dirs) do
+			if d[1] * dx + d[2] * dz > 0.98 then
+				if hw > nd.hw then nd.hw = hw end
+				return
+			end
+		end
+		nd.dirs[#nd.dirs + 1] = { dx, dz }
+		if hw > nd.hw then nd.hw = hw; nd.kind = kind end
+	end
+	for _, R in ipairs(ROADLIST) do
+		for _, p in ipairs(R.pts) do nodeAt(p.X, p.Y) end
+	end
+	-- 2) Kanten an Knoten aufteilen und Richtungen eintragen
+	local SUB = {}
+	for _, R in ipairs(ROADLIST) do
+		local pts, hw, kind = R.pts, R.def.hw, R.def.kind
+		for i = 1, #pts - 1 do
+			local a, b = pts[i], pts[i + 1]
+			local dx, dz = b.X - a.X, b.Y - a.Y
+			local L = math.sqrt(dx * dx + dz * dz)
+			if L > 0.5 then
+				local hit = {}
+				for _, nd in ipairs(order) do
+					local t = ((nd.x - a.X) * dx + (nd.z - a.Y) * dz) / (L * L)
+					if t > 0.0005 and t < 0.9995 then
+						local px, pz = a.X + dx * t, a.Y + dz * t
+						local perp = math.abs((nd.x - px) * dz - (nd.z - pz) * dx) / L
+						if perp < 1.5 then hit[#hit + 1] = { t = t, nd = nd } end
+					end
+				end
+				table.sort(hit, function(p, q) return p.t < q.t end)
+				local prev, prevT = a, 0
+				for _, h in ipairs(hit) do
+					SUB[#SUB + 1] = { ax = prev.X, az = prev.Y, bx = h.nd.x, bz = h.nd.z, hw = hw, kind = kind }
+					prev, prevT = V2(h.nd.x, h.nd.z), h.t
+				end
+				SUB[#SUB + 1] = { ax = prev.X, az = prev.Y, bx = b.X, bz = b.Y, hw = hw, kind = kind }
+			end
+		end
+	end
+	for _, sg in ipairs(SUB) do
+		addDir(nodeAt(sg.ax, sg.az), sg.ax - sg.bx, sg.az - sg.bz, sg.hw, sg.kind)
+		addDir(nodeAt(sg.bx, sg.bz), sg.bx - sg.ax, sg.bz - sg.az, sg.hw, sg.kind)
+	end
+
+	-- 3) Knotenstuecke setzen und Abschneide-Radius je Knoten merken
+	local function insideRB(x, z, extra)
+		for _, rb in ipairs(RBS) do
+			if (x - rb.c.X) ^ 2 + (z - rb.c.Y) ^ 2 < ((extra or 0) + 6) ^ 2 then return true end
+		end
+		return false
+	end
+	for _, nd in ipairs(order) do
+		local dirs = nd.dirs
+		local nD = #dirs
+		local perp = nD == 2 and math.abs(dirs[1][1] * dirs[2][1] + dirs[1][2] * dirs[2][2]) < 0.3
+		local s = (nd.hw or 6) / 2
+		nd.half = 4 * s
+		nd.piece = 0
+		do
+			if nD == 3 or nD == 4 then
+				local name = (nD == 3) and "Road_T_Junction_8x8" or "Road_4Way_Junction_8x8"
+				local yaw = yawFor(name, dirs)
+				if yaw == nil and KITS["Road_4Way_Junction_8x8"] and nD == 3 then
+					name, yaw = "Road_4Way_Junction_8x8", yawFor("Road_4Way_Junction_8x8", dirs)
+				end
+				if yaw then
+					kitPart(name, nd.x, nd.z, surfY(nd.x, nd.z) + 0.06, yaw, s, 1, kF)
+					kitJunc = kitJunc + 1
+					nd.piece = nd.half
+				end
+			elseif nD == 2 and perp then
+				local yaw = yawFor("Road_Curve90_8x8", dirs)
+				local nm = "Road_Curve90_8x8"
+				if not yaw and KITS["Road_Curve90_8x8_Mirror"] then
+					nm = "Road_Curve90_8x8_Mirror"
+					yaw = yawFor(nm, dirs)
+				end
+				if yaw then
+					kitPart(nm, nd.x, nd.z, surfY(nd.x, nd.z) + 0.06, yaw, s, 1, kF)
+					kitCurves = kitCurves + 1
+					nd.piece = nd.half
+				end
+			end
+		end
+	end
+
+	-- 4) Gerade Reihen zwischen den Knoten
+	local function tileName(kind, x, z)
+		if kind == "pass" then return "Road_Straight_Grass_8x8" end
+		if kind == "minor" then
+			return inVillage(x, z) and "Road_Straight_8x8" or "Road_Straight_Grass_8x8"
+		end
+		return inVillage(x, z) and "Road_Straight_8x8" or "Road_Straight_Edge_8x8"
+	end
+	for _, sg in ipairs(SUB) do
+		local L = math.sqrt((sg.bx - sg.ax) ^ 2 + (sg.bz - sg.az) ^ 2)
+		if L > 1 then
+			local ux, uz = (sg.bx - sg.ax) / L, (sg.bz - sg.az) / L
+			local na, nb = nodeAt(sg.ax, sg.az), nodeAt(sg.bx, sg.bz)
+			local t0 = na.piece or 0
+			local t1 = nb.piece or 0
+			local usable = L - t0 - t1
+			local s = sg.hw / 2
+			local tileLen = 8 * s
+			if usable > tileLen * 0.35 then
+				local nT = math.max(1, math.floor(usable / tileLen + 0.5))
+				local step = usable / nT
+				local kz = step / tileLen
+				-- Hoehe je Kachel + Glaettung gegen Stufen
+				local ys = {}
+				for i = 1, nT do
+					local d = t0 + (i - 0.5) * step
+					ys[i] = surfY(sg.ax + ux * d, sg.az + uz * d) + 0.06
+				end
+				ys = smooth(ys, 2, 3)
+				local yaw = math.atan2(ux, uz)
+				for i = 1, nT do
+					local d = t0 + (i - 0.5) * step
+					local x, z = sg.ax + ux * d, sg.az + uz * d
+					kitPart(tileName(sg.kind, x, z), x, z, ys[i], yaw, s, kz)
+				end
+			end
+		end
+	end
+
+	-- 5) Kreisel: 4 Kurven + 3 Kacheln je Seite (mittlere wird zum T, wenn ein
+	--    Arm anliegt). Arme liegen dadurch exakt 90 Studs vom Zentrum.
+	local RING_ARMS = {
+		[1] = { N = true, E = true, S = true },
+		[2] = { W = true, E = true, S = true },
+	}
+	for ri, rb in ipairs(RBS) do
+		local cx, cz = rb.c.X, rb.c.Y
+		local s = 4.5
+		local arms = RING_ARMS[ri] or {}
+		local function yAt(x, z) return surfY(x, z) + 0.06 end
+		-- Ecken: verbinden je zwei Seiten
+		local corners = {
+			{ x = cx - 72, z = cz - 72, d = { { 1, 0 }, { 0, 1 } } },
+			{ x = cx + 72, z = cz - 72, d = { { -1, 0 }, { 0, 1 } } },
+			{ x = cx + 72, z = cz + 72, d = { { -1, 0 }, { 0, -1 } } },
+			{ x = cx - 72, z = cz + 72, d = { { 1, 0 }, { 0, -1 } } },
+		}
+		for _, c in ipairs(corners) do
+			local nm = "Road_Curve90_8x8"
+			local yaw = yawFor(nm, c.d)
+			if not yaw and KITS["Road_Curve90_8x8_Mirror"] then
+				nm = "Road_Curve90_8x8_Mirror"; yaw = yawFor(nm, c.d)
+			end
+			if yaw then kitPart(nm, c.x, c.z, yAt(c.x, c.z), yaw, s, 1, kF); kitCurves = kitCurves + 1 end
+		end
+		-- Seiten: 3 Kacheln, Ausrichtung entlang der Seite
+		local sides = {
+			{ axis = "x", c = cz - 72, dir = { 1, 0 }, out = { 0, -1 }, arm = arms.S },
+			{ axis = "x", c = cz + 72, dir = { 1, 0 }, out = { 0, 1 }, arm = arms.N },
+			{ axis = "z", c = cx - 72, dir = { 0, 1 }, out = { -1, 0 }, arm = arms.W },
+			{ axis = "z", c = cx + 72, dir = { 0, 1 }, out = { 1, 0 }, arm = arms.E },
+		}
+		for _, sd in ipairs(sides) do
+			for k = -1, 1 do
+				local x, z
+				if sd.axis == "x" then x, z = cx + k * 36, sd.c
+				else x, z = sd.c, cz + k * 36 end
+				local mid = (k == 0)
+				if mid and sd.arm then
+					local want = { sd.dir, { -sd.dir[1], -sd.dir[2] }, sd.out }
+					local yaw = yawFor("Road_T_Junction_8x8", want)
+					if yaw then
+						kitPart("Road_T_Junction_8x8", x, z, yAt(x, z), yaw, s, 1, kF); kitJunc = kitJunc + 1
+					else
+						warn(("[Swiss Map] Kreisel-T ohne passende Drehung bei %.0f, %.0f"):format(x, z))
+					end
+				else
+					local yaw = yawFor("Road_Straight_8x8", { sd.dir, { -sd.dir[1], -sd.dir[2] } })
+					if yaw then kitPart("Road_Straight_8x8", x, z, yAt(x, z), yaw, s, 1, kF)
+					else warn(("[Swiss Map] Kreisel-Kachel ohne Drehung bei %.0f, %.0f"):format(x, z)) end
+				end
+			end
+		end
+		-- Insel bleibt Terrain/Gras (die Randsteine der Ringkacheln fassen sie ein)
+	end
+
+	print(("[Swiss Map] Kit-Netz: %d Kacheln, %d Kurven, %d Knotenstuecke"):format(kitTilesTotal, kitCurves, kitJunc))
+	if next(kitMissing) then
+		local miss = {}
+		for nm, c in pairs(kitMissing) do miss[#miss + 1] = nm .. " (" .. c .. ")" end
+		table.sort(miss)
+		warn("[Swiss Map] Fehlende Kacheln: " .. table.concat(miss, ", "))
+	end
+end
+
+-- Knotenflaechen (Task 47): im Kit-Netz liefern die T-/4-Weg-Kacheln die Flaeche
+if not KIT_ROADS then
+do
+	local junctionsF = folder("Kreuzungen", roadsF)
+	for _, nd in ipairs(NODES) do
+		local yTop = nd.h + ROAD_TOP + 0.02
+		part(junctionsF, V3(2.4, 2 * nd.r, 2 * nd.r), CFrame.new(nd.x, yTop - 1.2, nd.z) * UP, ASPH, E.Asphalt, CYL)
+		-- Oeffnungen je Arm: Winkel + halbe Breite (in Studs, nicht als Winkel,
+		-- damit Randstein- und Trottoirring bei verschiedenen Radien passen)
+		local openings = {}
+		for _, arm in ipairs(nd.arms) do
+			local dx, dz = arm.dx or 0, arm.dz or 0
+			if dx * dx + dz * dz > 0.001 then
+				local ang = math.atan2(dx, dz)
+				openings[#openings + 1] = { ang = ang, lat = arm.hw + 0.8 }
+			end
+		end
+		-- Durchgangsstrassen: Kreisuebergaenge der Road-Polylinien ableiten
+		for _, R2 in ipairs(ROADLIST) do
+			local P2, hw2 = R2.P, R2.def.hw
+			local lat2 = hw2 + 0.8
+			for i = 1, #P2 - 1 do
+				local d1 = dist2(P2[i].X, P2[i].Y, nd.x, nd.z)
+				local d2 = dist2(P2[i + 1].X, P2[i + 1].Y, nd.x, nd.z)
+				if (d1 < nd.r) ~= (d2 < nd.r) then
+					local po = (d2 >= nd.r) and P2[i + 1] or P2[i]
+					local vx, vz = po.X - nd.x, po.Y - nd.z
+					local l = math.sqrt(vx * vx + vz * vz)
+					if l > 0.01 then
+						local ang = math.atan2(vx / l, vz / l)
+						local known = false
+						for _, o in ipairs(openings) do
+							local dd = math.abs((ang - o.ang + math.pi * 3) % (math.pi * 2) - math.pi)
+							if dd < 0.12 then
+								known = true
+								if lat2 > o.lat then
+									o.lat = lat2
+								end
+								break
+							end
+						end
+						if not known then
+							openings[#openings + 1] = { ang = ang, lat = lat2 }
+						end
+					end
+				end
+			end
+		end
+		local function isOpen(a, rad, boost)
+			for _, o in ipairs(openings) do
+				local dd = math.abs((a - o.ang + math.pi * 3) % (math.pi * 2) - math.pi)
+				local half = math.asin(math.min(0.95, (o.lat + (boost or 0)) / rad))
+				if dd < half then
+					return true
+				end
+			end
+			return false
+		end
+		local SEG = 48
+		local top = nd.h + ROAD_TOP + 0.38
+		local segLen = 2 * math.pi * nd.r / SEG + 0.4
+		for k = 0, SEG - 1 do
+			local amid = (k + 0.5) * 2 * math.pi / SEG
+			if not isOpen(amid, nd.r) then
+				local px = nd.x + math.sin(amid) * nd.r
+				local pz = nd.z + math.cos(amid) * nd.r
+				part(junctionsF, V3(0.5, 0.9, segLen), CFrame.new(px, top - 0.45, pz) * CFrame.Angles(0, amid + math.pi / 2, 0), CURB, E.Concrete)
+			end
+		end
+		if inVillage(nd.x, nd.z) then
+			local rs = nd.r + 1.75
+			local segLenS = 2 * math.pi * rs / SEG + 0.4
+			for k = 0, SEG - 1 do
+				local amid = (k + 0.5) * 2 * math.pi / SEG
+				if not isOpen(amid, rs, 2.1) then
+					local px = nd.x + math.sin(amid) * rs
+					local pz = nd.z + math.cos(amid) * rs
+					part(junctionsF, V3(2.5, 1.9, segLenS), CFrame.new(px, top - 0.95, pz) * CFrame.Angles(0, amid + math.pi / 2, 0), SIDEW, E.Cobblestone)
+				end
+			end
+		end
+	end
+end
+end  -- KIT_ROADS
 
 -- Tempo-Schilder: 50 im Dorf, 80 ausserorts (Schweiz!)
 for _, R in ipairs(ROADLIST) do
@@ -1004,17 +1979,74 @@ print("[Swiss Map] Schilder gebaut")
 -- KREISEL
 ----------------------------------------------------------------
 local rbF = folder("Kreisel")
+-- Kreisel-Arme (Task 49): Zufahrtsrichtungen fuer die Oeffnungen im Randstein-/Trottoirbogen
+local RB_ARMS = {}
+for _, rb in ipairs(RBS) do
+	local arms = {}
+	for _, R in ipairs(ROADLIST) do
+		local P, d = R.P, nil
+		if R.def.rbStart == rb then
+			d = P[1] - rb.c
+		elseif R.def.rbEnd == rb then
+			d = P[#P] - rb.c
+		end
+		if d and d.Magnitude > 0.1 then
+			local u = d.Unit
+			arms[#arms + 1] = {
+				ang = math.atan2(u.X, u.Y),
+				half = math.asin(math.min(0.95, (R.def.hw + 0.8) / rb.Rout)),
+				hw = R.def.hw,
+				x = u.X,
+				z = u.Y,
+			}
+		end
+	end
+	RB_ARMS[rb] = arms
+end
+local function rbIsOpen(rb, a)
+	for _, o in ipairs(RB_ARMS[rb] or {}) do
+		local dd = math.abs((a - o.ang + math.pi * 3) % (math.pi * 2) - math.pi)
+		if dd < o.half then return true end
+	end
+	return false
+end
+if not KIT_ROADS then
 for _, rb in ipairs(RBS) do
 	local cx, cz = rb.c.X, rb.c.Y
 	local Rm = (rb.Rin + rb.Rout) / 2
 	local SEG = 48
 	local hy = surfY(cx, cz) + 0.15
+	-- Asphalt reicht bis Rout + 1.2, damit die Zufahrten (Ende bei Rout + 1) buendig anschliessen
+	local RW = rb.Rout - rb.Rin + 1.2
 	for k = 0, SEG - 1 do
 		local th = k * 2 * math.pi / SEG
-		local px, pz = cx + math.cos(th) * Rm, cz + math.sin(th) * Rm
-		local pos = V3(px, surfY(px, pz) + 0.15, pz)
+		local px, pz = cx + math.cos(th) * (Rm + 0.6), cz + math.sin(th) * (Rm + 0.6)
+		local pos = V3(px, surfY(px, pz) + ROAD_TOP - 0.4, pz)
 		local tan = V3(-math.sin(th), 0, math.cos(th))
-		part(rbF, V3(rb.Rout - rb.Rin, 0.8, 2 * math.pi * Rm / SEG * 1.4), CFrame.lookAt(pos, pos + tan), ASPH, E.Asphalt)
+		part(rbF, V3(RW, 0.8, 2 * math.pi * (Rm + 0.6) / SEG * 1.4), CFrame.lookAt(pos, pos + tan), ASPH, E.Asphalt)
+	end
+	-- Randstein-Bogen bei Rout (wie an den Knoten, Oeffnungen je Arm)
+	local curbLen = 2 * math.pi * rb.Rout / SEG + 0.6
+	for k = 0, SEG - 1 do
+		local th = (k + 0.5) * 2 * math.pi / SEG
+		if not rbIsOpen(rb, th) then
+			local px, pz = cx + math.sin(th) * rb.Rout, cz + math.cos(th) * rb.Rout
+			local top = surfY(px, pz) + ROAD_TOP + 0.38
+			part(rbF, V3(0.5, 0.9, curbLen), CFrame.new(px, top - 0.45, pz) * CFrame.Angles(0, th + math.pi / 2, 0), CURB, E.Concrete)
+		end
+	end
+	-- Trottoir-Bogen innerorts (gleiche Oeffnungen wie der Randstein)
+	if inVillage(cx, cz) then
+		local rs = rb.Rout + 1.75
+		local walkLen = 2 * math.pi * rs / SEG + 0.6
+		for k = 0, SEG - 1 do
+			local th = (k + 0.5) * 2 * math.pi / SEG
+			if not rbIsOpen(rb, th) then
+				local px, pz = cx + math.sin(th) * rs, cz + math.cos(th) * rs
+				local top = surfY(px, pz) + ROAD_TOP + 0.38
+				part(rbF, V3(2.5, 1.9, walkLen), CFrame.new(px, top - 0.95, pz) * CFrame.Angles(0, th + math.pi / 2, 0), SIDEW, E.Cobblestone)
+			end
+		end
 	end
 	-- Insel
 	part(rbF, V3(1.0, 2 * (rb.Rin + 0.8), 2 * (rb.Rin + 0.8)), CFrame.new(cx, hy + 0.5, cz) * UP, COL(176, 176, 172), E.Concrete, CYL)
@@ -1026,7 +2058,147 @@ for _, rb in ipairs(RBS) do
 			pick({ COL(230, 60, 70), COL(250, 210, 70), COL(245, 245, 245), COL(240, 130, 190) }), E.SmoothPlastic, BALL, false)
 	end
 end
+end  -- KIT_ROADS: Kreisel kommen aus dem Kachelring
+-- Insel-Deko der Kit-Kreisel (Fahne + Blumen), Flaeche kommt vom Ring
+if KIT_ROADS then
+	for _, rb in ipairs(RBS) do
+		local cx, cz = rb.c.X, rb.c.Y
+		local hy = surfY(cx, cz) + 0.15
+		swissFlag(rbF, cx, hy + 1, cz, 15, 0.6)
+		for k = 0, 13 do
+			local th = k * 2 * math.pi / 14
+			part(rbF, V3(1.1, 1.1, 1.1), CFrame.new(cx + math.cos(th) * 7.5, hy + 1.4, cz + math.sin(th) * 7.5),
+				pick({ COL(230, 60, 70), COL(250, 210, 70), COL(245, 245, 245), COL(240, 130, 190) }), E.SmoothPlastic, BALL, false)
+		end
+	end
+end
 print("[Swiss Map] Kreisel gebaut")
+
+------------------------------------------------------------
+-- NETZ-PRUEFUNG (Task 49): reine Ausgabe (print/warn), kein Spieleingriff
+------------------------------------------------------------
+do
+	local function junctionAt(x, z)
+		local best, bd = nil, math.huge
+		for _, nd in ipairs(NODES) do
+			local d = dist2(x, z, nd.x, nd.z)
+			if d < nd.r + 3 and d < bd then
+				best, bd = { x = nd.x, z = nd.z }, d
+			end
+		end
+		for _, rb in ipairs(RBS) do
+			local d = dist2(x, z, rb.c.X, rb.c.Y)
+			if d < rb.Rout + 3 and d < bd then
+				best, bd = { x = rb.c.X, z = rb.c.Y }, d
+			end
+		end
+		return best
+	end
+	local function nearPoi(x, z)
+		if dist2(x, z, DONER.x, DONER.z) < 140 then return true end
+		for _, g in ipairs(GARAGES) do
+			if dist2(x, z, g.x, g.z) < GARAGE_APRON_END + 40 then return true end
+		end
+		return false
+	end
+	-- Alle Knoten (inkl. Kreisel) mit unit-Armen sammeln
+	local junctions, armsTotal, dirArmsTotal = {}, 0, 0
+	for _, nd in ipairs(NODES) do
+		local arms = {}
+		for _, arm in ipairs(nd.arms) do
+			local dx, dz = arm.dx or 0, arm.dz or 0
+			local l = math.sqrt(dx * dx + dz * dz)
+			if l > 0.001 then
+				arms[#arms + 1] = { x = dx / l, z = dz / l, hw = arm.hw }
+			end
+		end
+		armsTotal = armsTotal + #nd.arms
+		dirArmsTotal = dirArmsTotal + #arms
+		junctions[#junctions + 1] = { label = ("Knoten %d"):format(#junctions + 1), x = nd.x, z = nd.z, r = nd.r, arms = arms }
+	end
+	local roundaboutIndex = 0
+	for _, rb in ipairs(RBS) do
+		roundaboutIndex = roundaboutIndex + 1
+		local arms = {}
+		for _, arm in ipairs(RB_ARMS[rb] or {}) do
+			arms[#arms + 1] = { x = arm.x, z = arm.z, hw = arm.hw }
+		end
+		armsTotal = armsTotal + #arms
+		dirArmsTotal = dirArmsTotal + #arms
+		junctions[#junctions + 1] = { label = ("Kreisel %d"):format(roundaboutIndex), x = rb.c.X, z = rb.c.Y, r = rb.Rout, arms = arms }
+	end
+	local stubs, openEnds = 0, 0
+	print(("[Netz] %d Knoten, %d Kreisverkehre, %d Arme (%d mit Richtung)"):format(#NODES, #RBS, armsTotal, dirArmsTotal))
+	for i, nd in ipairs(NODES) do
+		print(("[Netz] Knoten %d (%.0f, %.0f) r=%.1f: %d Arme"):format(i, nd.x, nd.z, nd.r, #nd.arms))
+	end
+	for i, rb in ipairs(RBS) do
+		print(("[Netz] Kreisel %d (%.0f, %.0f) r=%d: %d Arme"):format(i, rb.c.X, rb.c.Y, rb.Rout, #(RB_ARMS[rb] or {})))
+	end
+	-- 1) Arm ohne Fortsetzung hinter dem Knoten (= Sackgasse am Knoten)
+	for _, j in ipairs(junctions) do
+		for _, arm in ipairs(j.arms) do
+			local px, pz = j.x + arm.x * (j.r + 2), j.z + arm.z * (j.r + 2)
+			if roadDist(px, pz) > arm.hw + 3 then
+				stubs = stubs + 1
+				warn(("[Netz] Sackgasse: %s (%.0f, %.0f) hat einen Arm ohne Gegenknoten"):format(j.label, j.x, j.z))
+			end
+		end
+	end
+	-- 2) Segmente kuerzer als 2*hw sowie offene Strassenenden
+	for _, R in ipairs(ROADLIST) do
+		local def, P = R.def, R.P
+		local a, b = P[1], P[#P]
+		local ja, jb = junctionAt(a.X, a.Y), junctionAt(b.X, b.Y)
+		if ja and jb then
+			local seg = dist2(ja.x, ja.z, jb.x, jb.z)
+			if seg < 2 * def.hw then
+				warn(("[Netz] Segment kuerzer als 2*hw (%.1f < %.1f): %s"):format(seg, 2 * def.hw, def.name))
+			end
+		elseif ja or jb then
+			local j = ja or jb
+			local free = ja and b or a
+			local armLen = dist2(j.x, j.z, free.X, free.Y)
+			if def.kind ~= "drive" and not nearPoi(free.X, free.Y) then
+				if armLen < 60 then
+					stubs = stubs + 1
+					warn(("[Netz] Sackgasse: %s endet nach %.0f Studs ohne Gegenknoten (%.0f, %.0f)"):format(def.name, armLen, free.X, free.Y))
+				else
+					openEnds = openEnds + 1
+				end
+			end
+		else
+			warn(("[Netz] Strasse ohne Knotenanbindung: %s bei (%.0f, %.0f)"):format(def.name, a.X, a.Y))
+		end
+	end
+	-- 3) Knoten naeher als r1 + r2 + 6
+	for i = 1, #junctions - 1 do
+		local a = junctions[i]
+		for k = i + 1, #junctions do
+			local b = junctions[k]
+			local d = dist2(a.x, a.z, b.x, b.z)
+			if d < a.r + b.r + 6 then
+				warn(("[Netz] %s und %s liegen zu nah beieinander (%.1f < %.1f)"):format(a.label, b.label, d, a.r + b.r + 6))
+			end
+		end
+	end
+	-- 4) Arme, die weniger als 35 Grad auseinander stehen
+	for _, j in ipairs(junctions) do
+		for i = 1, #j.arms - 1 do
+			for k = i + 1, #j.arms do
+				local dot = clamp(j.arms[i].x * j.arms[k].x + j.arms[i].z * j.arms[k].z, -1, 1)
+				local ang = math.deg(math.acos(dot))
+				if ang < 35 then
+					warn(("[Netz] %s: zwei Arme stehen nur %.0f Grad auseinander"):format(j.label, ang))
+				end
+			end
+		end
+	end
+	print(("[Netz] %d offene Strassenenden (Zufahrten in Wald/Wiese/Pass, kein Fehler)"):format(openEnds))
+	if stubs == 0 then
+		print("[Netz] Keine Sackgassen oder Strassenstummel gefunden")
+	end
+end
 
 ----------------------------------------------------------------
 -- HAEUSER (5 Typen, alles zufaellig variiert -> keine zwei gleich)
@@ -1130,34 +2302,13 @@ local function roofGutter(m, base, rb, span, len, pitch, over)
 		part(m, V3(len + over * 2, 0.42, 0.42),
 			base * CFrame.new(sx * (half + 0.12), eaveY + 0.02, 0) * CFrame.Angles(0, math.pi / 2, 0),
 			GUTTERC, E.Metal, CYL, false)
-		for _, sz in ipairs({ -1, 1 }) do
-			local hp = (base * CFrame.new(sx * (half - 0.1), 0.7, sz * (len / 2 + 0.25))).Position
-			upright(m, hp, math.max(2, eaveY - 0.5), 0.34, GUTTERC, E.Metal, false)
-		end
 	end
+	-- Genau ein Fallrohr pro Haus: vorne, Strassenseite, am Traufende
+	local sx, sz = -1, 1
+	local hp = (base * CFrame.new(sx * (half - 0.1), 0.7, sz * (len / 2 + 0.25))).Position
+	upright(m, hp, math.max(2, eaveY - 0.5), 0.34, GUTTERC, E.Metal, false)
 end
 
--- Dachgaube auf einer Dachschraege (Seite sx = -1/1)
-local function roofDormer(m, base, sx, span, len, pitch, rb, over, wallC, roofC, roofMat, trimC)
-	local a = math.rad(pitch)
-	local half = span / 2 + over
-	local d = half * 0.55                      -- Abstand des Gaubenfensters von der Traufe
-	local y = rb + (span / 2) * math.tan(a) - d * 1.0 * math.tan(a) - 1.0
-	local w = 4.6
-	local cz = 0
-	local sc = base * CFrame.new(sx * d, y, cz) * CFrame.Angles(0, sx * math.pi / 2, 0)
-	-- Wangen und Front
-	part(m, V3(w, 3.8, 0.5), sc * CFrame.new(0, 0, 0.5), wallC)
-	part(m, V3(0.5, 3.8, 3.2), sc * CFrame.new(-w / 2, 0, 2.0), wallC)
-	part(m, V3(0.5, 3.8, 3.2), sc * CFrame.new(w / 2, 0, 2.0), wallC)
-	-- Fenster
-	part(m, V3(3.2, 2.6, 0.35), sc * CFrame.new(0, 0.2, 0.78), trimC, E.Wood)
-	part(m, V3(2.5, 1.9, 0.3), sc * CFrame.new(0, 0.2, 0.95), GLASSC, E.Glass, nil, false, 0.28)
-	part(m, V3(0.2, 1.9, 0.14), sc * CFrame.new(0, 0.2, 1.06), trimC)
-	-- kleines Satteldach
-	part(m, V3(w + 1.2, 0.35, 2.4), sc * CFrame.new(0, 2.35, 1.3) * CFrame.Angles(0.42, 0, 0), roofC, roofMat)
-	part(m, V3(w + 1.2, 0.35, 1.6), sc * CFrame.new(0, 2.55, 2.7) * CFrame.Angles(-0.3, 0, 0), roofC, roofMat)
-end
 
 local function timberWall(m, sc, len, H, floors, FH, color)
 	local n = math.max(2, math.floor(len / 3.6))
@@ -1311,7 +2462,7 @@ local function rollHouse(wantRoof)
 			S.atticWin = true
 		elseif kind == "stadt" then
 			S.W, S.D, S.floors = rnd(10, 14), rnd(11, 15), 3
-			S.roofType = (math.random() < 0.7) and "gableX" or "flat"
+			S.roofType = "gableX"
 			S.pitch, S.over = rnd(34, 42), 2
 			S.awning = math.random() < 0.55
 			S.shop = nil
@@ -1324,7 +2475,8 @@ local function rollHouse(wantRoof)
 			S.wallC = pick({ COL(245, 240, 228), COL(238, 230, 205), COL(236, 214, 190) })
 		else -- villa
 			S.W, S.D, S.floors = rnd(14, 20), rnd(12, 16), math.random(1, 2)
-			S.roofType = "flat"
+			S.roofType = "gableX"
+			S.pitch, S.over = rnd(30, 38), 2.2
 			S.shutC = nil
 			S.big = true
 			S.wallC = pick({ COL(240, 240, 236), COL(205, 208, 212), COL(88, 92, 98), COL(226, 214, 196) })
@@ -1473,18 +2625,12 @@ local function buildHouse(parent, pos, yaw, S)
 			part(m, V3(3.6, 0.2, 2.2), base * CFrame.new(px, 1 + H + 0.98, -D * 0.15) * CFrame.Angles(math.rad(6), 0, 0), COL(30, 44, 80), E.Glass)
 		end
 	end
-	-- Dachrinne + Fallrohre und eine Dachgaube: mehr echte 3D-Substanz
+	-- Dachrinne + Fallrohre: mehr echte 3D-Substanz
 	if S.roofType == "gableZ" then
 		roofGutter(m, base, 1 + H, W, D, S.pitch, S.over)
-		if W >= 12.5 and math.random() < 0.6 then
-			roofDormer(m, base, pick({ -1, 1 }), W, D, S.pitch, 1 + H, S.over, gableC, S.roofC, S.roofMat, S.trimC)
-		end
 	elseif S.roofType == "gableX" then
 		local rb2 = base * CFrame.Angles(0, math.pi / 2, 0)
 		roofGutter(m, rb2, 1 + H, D, W, S.pitch, S.over)
-		if D >= 12.5 and math.random() < 0.55 then
-			roofDormer(m, rb2, pick({ -1, 1 }), D, W, S.pitch, 1 + H, S.over, gableC, S.roofC, S.roofMat, S.trimC)
-		end
 	end
 	if S.chimney and S.roofType ~= "flat" then
 		local span = (S.roofType == "gableZ") and W or D
@@ -1526,7 +2672,7 @@ local function buildHouse(parent, pos, yaw, S)
 		local gy = surfY(wp.X, wp.Z)
 		part(m, V3(3.4, 0.16, plen), CFrame.new(wp.X, gy + 0.12, wp.Z) * CFrame.Angles(0, yaw, 0), COL(178, 170, 154), E.Ground)
 	end
-	local hedgeZ = -(lot - 1.2)
+	local hedgeZ = -(lot - 2.6)
 	if S.fence then
 		fenceLine(m, fr.front, -W / 2 - 4, doorU - 2.4, hedgeZ, S.wood)
 		fenceLine(m, fr.front, doorU + 2.4, W / 2 + 4, hedgeZ, S.wood)
@@ -1906,6 +3052,254 @@ local function connectToRoad(parent, x, z, from, width)
 		part(parent, V3(width or 8, 0.45, 16), CFrame.lookAt(V3(px, ph + 0.3, pz), V3(rp[1], ph + 0.3, rp[2])),
 			COL(168, 160, 146), E.Ground)
 	end
+end
+
+----------------------------------------------------------------
+-- MODERNES FLACHDACH-QUARTIER (MFH nach Schweizer Vorbildern, exklusiv hier)
+-- Kubische Mehrfamilienhaeuser mit Flachdach + Attika, Fensterbaendern,
+-- Dachterrasse mit Gelaender + PV, Carports, Hecken, Kieswegen, Innenhof.
+-- Flachdaecher kommen ausschliesslich hier vor (normaler Haus-Loop: nur Sattel).
+----------------------------------------------------------------
+local function buildModernBlock(parent, x, y, z, yaw, floors, width)
+	local m = Instance.new("Model")
+	m.Name = "ModernMFH"
+	m.Parent = parent
+	local FH = 12.0
+	local W = width
+	local D = math.floor(width * 0.72 + 0.5)
+	local H = floors * FH
+	local base = CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0)
+	local fr = sideFrames(base, W, D)
+	local wallC = pick({ COL(240, 240, 236), COL(226, 228, 230), COL(232, 226, 214) })
+	local dark = COL(44, 46, 52)
+	local wood = pick({ COL(150, 112, 76), COL(124, 88, 58) })
+	local conc = COL(150, 147, 140)
+	-- Sockel + Fundament
+	part(m, V3(W + 1.6, 8, D + 1.6), base * CFrame.new(0, -3, 0), STONE, E.Concrete)
+	part(m, V3(W + 0.5, 1.6, D + 0.5), base * CFrame.new(0, 0.8, 0), conc, E.Concrete)
+	-- Kubischer Baukoerper (kein Dachueberstand, kein Satteldach)
+	part(m, V3(W, H, D), base * CFrame.new(0, 1 + H / 2, 0), wallC, E.SmoothPlastic)
+	-- Geschossbaender aus Sichtbeton
+	for f = 1, floors - 1 do
+		part(m, V3(W + 0.5, 0.7, D + 0.5), base * CFrame.new(0, 1 + f * FH, 0), conc, E.Concrete)
+	end
+	-- Fensterbaender: dunkler Rahmen + Glas + Pfosten, EG mit Tuer-Luecke
+	for f = 1, floors do
+		local vy = 1 + (f - 1) * FH + 6.8
+		for _, sd in ipairs({ fr.front, fr.back }) do
+			if f == 1 and sd == fr.front then
+				-- EG-Front: zwei Bandsegmente links/rechts der Eingangstuer
+				for _, sx in ipairs({ -1, 1 }) do
+					local segW = (W - 3) / 2 - 3.4
+					if segW > 3 then
+						local cu = sx * (3.4 + segW / 2)
+						part(m, V3(segW, 3.8, 0.5), sd * CFrame.new(cu, vy, -0.25), dark, E.Metal)
+						part(m, V3(segW - 0.6, 3.0, 0.3), sd * CFrame.new(cu, vy, -0.45), GLASSC, E.Glass, nil, false, 0.3)
+					end
+				end
+			else
+				part(m, V3(W - 3, 3.8, 0.5), sd * CFrame.new(0, vy, -0.25), dark, E.Metal)
+				part(m, V3(W - 3.6, 3.0, 0.3), sd * CFrame.new(0, vy, -0.45), GLASSC, E.Glass, nil, false, 0.3)
+				local n = math.max(2, math.floor((W - 3) / 7))
+				for j = 0, n do
+					part(m, V3(0.35, 3.0, 0.35), sd * CFrame.new(-(W - 3) / 2 + j * (W - 3) / n, vy, -0.55), dark, E.Metal, nil, false)
+				end
+			end
+		end
+		for _, sd in ipairs({ fr.left, fr.right }) do
+			part(m, V3(D - 3, 3.4, 0.5), sd * CFrame.new(0, vy, -0.25), dark, E.Metal)
+			part(m, V3(D - 3.6, 2.7, 0.3), sd * CFrame.new(0, vy, -0.45), GLASSC, E.Glass, nil, false, 0.3)
+		end
+	end
+	-- EG-Akzent: Holzpaneele neben dem Eingang
+	part(m, V3(6.5, 5.2, 0.5), fr.front * CFrame.new(-W / 2 + 5.5, 3.6, -0.3), wood, E.Wood)
+	part(m, V3(6.5, 5.2, 0.5), fr.front * CFrame.new(W / 2 - 5.5, 3.6, -0.3), wood, E.Wood)
+	-- Eingangstuer mit Vordach
+	part(m, V3(5.2, 7.4, 0.7), fr.front * CFrame.new(0, 4.7, -0.35), dark, E.Metal)
+	part(m, V3(4.0, 6.6, 0.5), fr.front * CFrame.new(0, 4.3, -0.7), COL(60, 100, 70), E.Wood)
+	part(m, V3(1.6, 2.0, 0.2), fr.front * CFrame.new(0, 5.6, -1.0), GLASSC, E.Glass, nil, nil, 0.3)
+	part(m, V3(7.5, 0.5, 3.6), fr.front * CFrame.new(0, 8.6, -1.9), conc, E.Concrete)
+	for _, sx in ipairs({ -1, 1 }) do
+		part(m, V3(0.45, 7.6, 0.45), fr.front * CFrame.new(sx * 3.3, 4.8, -3.4), COL(70, 74, 80), E.Metal)
+	end
+	part(m, V3(5.5, 0.7, 2.6), fr.front * CFrame.new(0, 0.5, -1.7), STONE, E.Concrete)
+	local plate = part(m, V3(1.5, 1.0, 0.2), fr.front * CFrame.new(3.6, 5.4, -0.5), WHITE)
+	textOn(plate, Enum.NormalId.Front, tostring(math.random(1, 99)), COL(20, 20, 20), Enum.Font.GothamBold)
+	-- Attika als umlaufendes Band (kein Ueberstand, kein Fallrohr, keine Gaube)
+	part(m, V3(W + 0.6, 0.8, D + 0.6), base * CFrame.new(0, 1 + H + 0.4, 0), wallC, E.Concrete)
+	for _, e in ipairs({ { 0, D / 2 + 0.05, W + 0.6, 0.6 }, { 0, -D / 2 - 0.05, W + 0.6, 0.6 }, { W / 2 + 0.05, 0, 0.6, D + 0.6 }, { -W / 2 - 0.05, 0, 0.6, D + 0.6 } }) do
+		part(m, V3(e[3], 2.2, e[4]), base * CFrame.new(e[1], 1 + H + 1.6, e[2]), wallC, E.Concrete)
+	end
+	-- Dachterrasse: Holzdeck + Glas-/Metallgelaender auf einer Haelfte ...
+	-- ... PV-Module (2 bis 3) plus Technikbox auf der anderen Haelfte
+	local roofY = 1 + H + 0.8
+	local terU = -W * 0.22
+	local deckW, deckD = W * 0.42, D * 0.6
+	part(m, V3(deckW, 0.35, deckD), base * CFrame.new(terU, roofY + 0.18, 0), COL(168, 128, 92), E.WoodPlanks)
+	local railH = 3.2
+	for _, e in ipairs({ { terU, deckD / 2 }, { terU, -deckD / 2 }, { terU - deckW / 2, 0 }, { terU + deckW / 2, 0 } }) do
+		local along = (e[2] ~= 0) and deckW or deckD
+		local n = math.max(2, math.floor(along / 4))
+		for j = 0, n do
+			local off = -along / 2 + j * along / n
+			local px = (e[2] ~= 0) and (terU + off) or e[1]
+			local pz = (e[2] ~= 0) and e[2] or off
+			part(m, V3(0.28, railH, 0.28), base * CFrame.new(px, roofY + railH / 2, pz), COL(70, 74, 80), E.Metal, nil, false)
+		end
+		if e[2] ~= 0 then
+			part(m, V3(deckW, 0.3, 0.3), base * CFrame.new(terU, roofY + railH, e[2]), COL(70, 74, 80), E.Metal, nil, false)
+			part(m, V3(deckW, 1.6, 0.15), base * CFrame.new(terU, roofY + railH - 1.0, e[2]), GLASSC, E.Glass, nil, false, 0.4)
+		else
+			part(m, V3(0.3, 0.3, deckD), base * CFrame.new(e[1], roofY + railH, 0), COL(70, 74, 80), E.Metal, nil, false)
+		end
+	end
+	local pvU = W * 0.24
+	local nPV = (W >= 40) and 3 or 2
+	for q = 0, nPV - 1 do
+		part(m, V3(3.6, 0.2, 2.6), base * CFrame.new(pvU - 5.5, roofY + 0.6, -D * 0.18 + q * 4.6) * CFrame.Angles(-0.35, 0, 0), COL(28, 40, 78), E.Glass)
+	end
+	part(m, V3(2.6, 1.8, 2.2), base * CFrame.new(pvU, roofY + 0.9, D * 0.28), COL(200, 204, 208), E.Metal)
+	return m
+end
+
+-- Offener Carport zwischen zwei Bloecken: Stahlstuetzen + Flachdeck
+local function buildModernCarport(parent, x, y, z, yaw, w)
+	local m = Instance.new("Model")
+	m.Name = "ModernCarport"
+	m.Parent = parent
+	local base = CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0)
+	local H = 8.5
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			part(m, V3(0.7, H, 0.7), base * CFrame.new(sx * (w / 2 - 0.5), H / 2, sz * 5.5), COL(70, 74, 80), E.Metal)
+		end
+	end
+	part(m, V3(w, 0.7, 13), base * CFrame.new(0, H + 0.35, 0), COL(62, 64, 70), E.Concrete)
+	part(m, V3(w, 1.0, 0.5), base * CFrame.new(0, H + 1.0, 6.4), COL(150, 147, 140), E.Concrete)
+	part(m, V3(w, 1.0, 0.5), base * CFrame.new(0, H + 1.0, -6.4), COL(150, 147, 140), E.Concrete)
+	return m
+end
+
+-- Quartier-Block: eigene Quartierstrasse + 3 Zeilen (je 3-4 Bloecke) + Innenhof
+local function buildModernQuarter(parent, qx, qz, qr)
+	local rp0, _ = nearestRoadPt(qx, qz)
+	local yawQ = 0
+	if rp0 then yawQ = math.atan2(rp0[1] - qx, rp0[2] - qz) end
+	local gyQ = groundMaxAt(CFrame.new(qx, 0, qz), 150, 110)
+	if gyQ == -math.huge then gyQ = heightAt(qx, qz) end
+	local base = CFrame.new(qx, gyQ, qz) * CFrame.Angles(0, yawQ, 0)
+	-- Quartierstrasse (Asphalt + beidseitiges Trottoir), folgt dem Terrain
+	for lx = -140, 140, 14 do
+		local wp = (base * CFrame.new(lx, 0, 0)).Position
+		local sy = surfY(wp.X, wp.Z)
+		local seg = CFrame.new(wp.X, sy + 0.25, wp.Z) * CFrame.Angles(0, yawQ, 0)
+		part(parent, V3(15, 0.5, 11), seg, COL(62, 64, 70), E.Asphalt, nil, false)
+		part(parent, V3(15, 0.3, 2.6), seg * CFrame.new(0, 0.15, 6.8), COL(158, 158, 154), E.Concrete, nil, false)
+		part(parent, V3(15, 0.3, 2.6), seg * CFrame.new(0, 0.15, -6.8), COL(158, 158, 154), E.Concrete, nil, false)
+	end
+	occAddRect(qx, qz, 150, 14, yawQ)
+	local rows = {
+		{ lz = -52, n = 4, fl = { 2, 3, 2, 3 } },
+		{ lz = 52, n = 4, fl = { 3, 2, 3, 2 } },
+		{ lz = 112, n = 3, fl = { 2, 3, 2 } },
+	}
+	local stepX = 64
+	local nBlocks = 0
+	for _, row in ipairs(rows) do
+		local yaw = yawQ + ((row.lz > 0) and math.pi or 0)
+		local prevLX = nil
+		for i = 1, row.n do
+			local lx = (i - (row.n + 1) / 2) * stepX
+			local wp = (base * CFrame.new(lx, 0, row.lz)).Position
+			local w = rnd(36, 44)
+			local dd = w * 0.72
+			local fl = row.fl[((i - 1) % #row.fl) + 1]
+			local ok = dist2(wp.X, wp.Z, qx, qz) < qr + 60
+				and lakeD(wp.X, wp.Z) > 1.1
+				and occFreeRect(wp.X, wp.Z, w / 2 + 4, dd / 2 + 7, yaw)
+			if ok then
+				local d, _, hw = roadQuery(wp.X, wp.Z)
+				if d and hw and d - hw < dd / 2 + 9 then ok = false end
+			end
+			if ok then
+				local cf = CFrame.new(wp.X, 0, wp.Z) * CFrame.Angles(0, yaw, 0)
+				local hmin, hmax = math.huge, -math.huge
+				for _, q in ipairs({ { 0, 0 }, { w / 2, dd / 2 }, { -w / 2, dd / 2 }, { w / 2, -dd / 2 }, { -w / 2, -dd / 2 } }) do
+					local p2 = (cf * CFrame.new(q[1], 0, q[2])).Position
+					local hh = heightAt(p2.X, p2.Z)
+					if hh < hmin then hmin = hh end
+					if hh > hmax then hmax = hh end
+				end
+				if hmax - hmin > 4 then ok = false end
+			end
+			if ok then
+				local gy = groundMaxAt(CFrame.new(wp.X, 0, wp.Z), w / 2, dd / 2)
+				if gy == -math.huge then gy = groundY(wp.X, wp.Z) end
+				buildModernBlock(parent, wp.X, gy + 0.35, wp.Z, yaw, fl, w)
+				occAddRect(wp.X, wp.Z, w / 2 + 4, dd / 2 + 7, yaw)
+				nBlocks = nBlocks + 1
+				-- Kiesweg vom Block zum Trottoir der Quartierstrasse
+				local sgn = (row.lz > 0) and 1 or -1
+				local edge = (base * CFrame.new(lx, 0, row.lz - sgn * (dd / 2 + 1))).Position
+				local goal = (base * CFrame.new(lx, 0, sgn * 8)).Position
+				local dx2, dz2 = goal.X - edge.X, goal.Z - edge.Z
+				local dl2 = math.sqrt(dx2 * dx2 + dz2 * dz2)
+				if dl2 > 4 then
+					local nSeg = math.max(2, math.ceil(dl2 / 10))
+					for sgi = 0, nSeg do
+						local t = sgi / nSeg
+						local px, pz = lerp(edge.X, goal.X, t), lerp(edge.Z, goal.Z, t)
+						local py = surfY(px, pz)
+						part(parent, V3(3.4, 0.3, dl2 / nSeg + 2),
+							CFrame.lookAt(V3(px, py + 0.15, pz), V3(goal.X, py + 0.15, goal.Z)),
+							COL(178, 170, 154), E.Ground, nil, false)
+					end
+				end
+				-- Hecken seitlich am Block
+				for _, sx in ipairs({ -1, 1 }) do
+					local hp = (CFrame.new(wp.X, 0, wp.Z) * CFrame.Angles(0, yaw, 0) * CFrame.new(sx * (w / 2 + 3), 0, dd / 2 + 3)).Position
+					local hy = surfY(hp.X, hp.Z)
+					part(parent, V3(1.6, 2.2, dd * 0.7), CFrame.new(hp.X, hy + 1.0, hp.Z) * CFrame.Angles(0, yaw, 0), COL(58, 116, 54), E.Grass)
+				end
+				-- Carport in der Luecke zum Vorgaengerblock
+				if prevLX then
+					local mlx = (prevLX + lx) / 2
+					local mp = (base * CFrame.new(mlx, 0, row.lz)).Position
+					if occFreeRect(mp.X, mp.Z, 8, 8, yaw) and lakeD(mp.X, mp.Z) > 1.1 then
+						local my = groundMaxAt(CFrame.new(mp.X, 0, mp.Z), 7, 6)
+						if my == -math.huge then my = groundY(mp.X, mp.Z) end
+						buildModernCarport(parent, mp.X, my + 0.3, mp.Z, yaw, 14)
+						occAddRect(mp.X, mp.Z, 8, 8, yaw)
+					end
+				end
+				task.wait()
+			end
+			prevLX = lx
+		end
+	end
+	-- Begruenter Innenhof zwischen Zeile 2 und 3: Rasen, Hecken, Baeume, Kieskreuz
+	do
+		local cp = (base * CFrame.new(0, 0, 82)).Position
+		local cy = surfY(cp.X, cp.Z)
+		part(parent, V3(3 * stepX, 0.4, 34), CFrame.new(cp.X, cy + 0.1, cp.Z) * CFrame.Angles(0, yawQ, 0), COL(86, 158, 66), E.Grass, nil, false)
+		for _, hx in ipairs({ -1.5 * stepX, 1.5 * stepX }) do
+			local hp = (base * CFrame.new(hx, 0, 82)).Position
+			local hy = surfY(hp.X, hp.Z)
+			part(parent, V3(2.0, 2.2, 34), CFrame.new(hp.X, hy + 1.0, hp.Z) * CFrame.Angles(0, yawQ, 0), COL(58, 116, 54), E.Grass)
+		end
+		for _, tx in ipairs({ -stepX, 0, stepX }) do
+			local tp = (base * CFrame.new(tx, 0, 82)).Position
+			gardenTree(parent, V3(tp.X, surfY(tp.X, tp.Z) + 0.3, tp.Z))
+		end
+	end
+	-- Anbindung der Quartierstrassen-Enden ans Netz
+	do
+		local e1 = (base * CFrame.new(-150, 0, 0)).Position
+		local e2 = (base * CFrame.new(150, 0, 0)).Position
+		connectToRoad(parent, e1.X, e1.Z, 4, 10)
+		connectToRoad(parent, e2.X, e2.Z, 4, 10)
+	end
+	print(("[Swiss Map] Modern-Quartier: %d Bloecke"):format(nBlocks))
 end
 
 -- Gemeinsame Ladenhuelle: Sockel, Boden, Waende, Schaufenster, Tuer, Dach, Schild
@@ -2743,10 +4137,11 @@ for _, v in ipairs(VILLAGES) do
 		if gapLeft > 0 then
 			gapLeft = gapLeft - 1
 		elseif blockLeft <= 0 then
-			local modern = dist2(s.p.X, s.p.Y, MODERN.x, MODERN.z) < MODERN.r
-			blockRoof = (modern and math.random() < 0.85) and "flat" or "gable"
+			-- Flachdaecher stehen ausschliesslich im Modern-Quartier (Task 44);
+			-- in den Doerfern nur Satteldach-Bauzeilen.
+			blockRoof = "gable"
 			blockLeft = math.random(4, 6)
-			gapLeft = (placed > 0) and math.random(2, 3) or 0
+			gapLeft = (placed > 0) and math.random(3, 5) or 0
 		else
 			local S = rollHouse(blockRoof)
 			if S then
@@ -2758,9 +4153,10 @@ for _, v in ipairs(VILLAGES) do
 				local ok = dist2(x, z, v.x, v.z) < v.rf + 12 * WS
 					and occFreeRect(x, z, S.W / 2 + 3.0, S.D / 2 + 3.0, yaw)
 					and lakeD(x, z) > 1.1
+					and dist2(x, z, MODERN.x, MODERN.z) > MODERN.r + 30
 				if ok then
 					local d, _, hw = roadQuery(x, z)
-					if d and d - hw < S.D / 2 + 2.5 then ok = false end
+					if d and d - hw < S.D / 2 + 8.5 then ok = false end
 				end
 				if ok then
 					local cf = CFrame.new(x, 0, z) * CFrame.Angles(0, yaw, 0)
@@ -2785,6 +4181,14 @@ for _, v in ipairs(VILLAGES) do
 		end
 	end
 	print(("[Swiss Map] %s: %d Haeuser"):format(v.name, placed))
+end
+
+----------------------------------------------------------------
+-- MODERNES FLACHDACH-QUARTIER bei Talort (Task 44, exklusiv Flachdach)
+----------------------------------------------------------------
+do
+	local modernF = folder("ModernQuartier", housesF)
+	buildModernQuarter(modernF, MODERN.x, MODERN.z, MODERN.r)
 end
 
 ----------------------------------------------------------------
@@ -3122,6 +4526,16 @@ end
 
 for _, T in ipairs(treeT) do T.part:Destroy() end
 if spireTemplate then spireTemplate.part:Destroy() end
+
+-- Performance: grosse Deko-Flächen werfen keine Schatten (45k Haeuserteile bleiben Schattenwerfer)
+for _, name in ipairs({ "Strassen", "Baeume", "Aecker", "Kuhweiden", "Laternen", "Schilder" }) do
+	local f = map:FindFirstChild(name)
+	if f then
+		for _, d in ipairs(f:GetDescendants()) do
+			if d:IsA("BasePart") then d.CastShadow = false end
+		end
+	end
+end
 
 print(("[Swiss Map] FERTIG!  %d Haeuser, %d Garagen, %d Tannen, %d Weiden. Gras %.2f. Viel Spass mit dem Toeffli-Spiel!")
 	:format(nHouses, #GARAGES, placedTrees, nPast, terrain.GrassLength))
