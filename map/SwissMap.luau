@@ -331,7 +331,7 @@ local ROADS = {
 	{ name = "Waldstrasse", kind = "minor", hw = 6, pts = {
 		V2(-1008, -1776), V2(-432, -1776) } },
 	{ name = "Dorfplatz", kind = "minor", hw = 6, pts = {
-		V2(144, 1800), V2(144, 1884) } },
+		V2(144, 1800), V2(144, 1890) } },
 	{ name = "Talweg", kind = "minor", hw = 6, pts = {
 		V2(648, 1800), V2(648, 1656) } },
 	{ name = "Bachstrasse", kind = "minor", hw = 6, pts = {
@@ -1109,7 +1109,7 @@ do
 	if n > 0 then
 		print(("[Swiss Map] RoadKit: %d Vorlagen"):format(n))
 	else
-		warn("[Swiss Map] RoadKit fehlt (0 Vorlagen) - prozedurale Strassen aktiv")
+		warn("[Swiss Map] RoadKit fehlt (0 Vorlagen) - graue Platzhalterkacheln aktiv")
 	end
 end
 
@@ -1678,33 +1678,65 @@ if KIT_ROADS then
 	for _, R in ipairs(ROADLIST) do
 		for _, p in ipairs(R.pts) do nodeAt(p.X, p.Y) end
 	end
-	-- 2) Kanten an Knoten aufteilen und Richtungen eintragen
-	local SUB = {}
+	-- 2) Kanten sammeln
+	local LEGS = {}
 	for _, R in ipairs(ROADLIST) do
 		local pts, hw, kind = R.pts, R.def.hw, R.def.kind
 		for i = 1, #pts - 1 do
 			local a, b = pts[i], pts[i + 1]
-			local dx, dz = b.X - a.X, b.Y - a.Y
-			local L = math.sqrt(dx * dx + dz * dz)
-			if L > 0.5 then
-				local hit = {}
-				for _, nd in ipairs(order) do
-					local t = ((nd.x - a.X) * dx + (nd.z - a.Y) * dz) / (L * L)
-					if t > 0.0005 and t < 0.9995 then
-						local px, pz = a.X + dx * t, a.Y + dz * t
-						local perp = math.abs((nd.x - px) * dz - (nd.z - pz) * dx) / L
-						if perp < 1.5 then hit[#hit + 1] = { t = t, nd = nd } end
-					end
-				end
-				table.sort(hit, function(p, q) return p.t < q.t end)
-				local prev, prevT = a, 0
-				for _, h in ipairs(hit) do
-					SUB[#SUB + 1] = { ax = prev.X, az = prev.Y, bx = h.nd.x, bz = h.nd.z, hw = hw, kind = kind }
-					prev, prevT = V2(h.nd.x, h.nd.z), h.t
-				end
-				SUB[#SUB + 1] = { ax = prev.X, az = prev.Y, bx = b.X, bz = b.Y, hw = hw, kind = kind }
+			if math.abs(b.X - a.X) + math.abs(b.Y - a.Y) > 0.5 then
+				LEGS[#LEGS + 1] = { ax = a.X, az = a.Y, bx = b.X, bz = b.Y, hw = hw, kind = kind }
 			end
 		end
+	end
+	-- 2b) X-Kreuzungen: zwei Kanten kreuzen sich ohne gemeinsamen Eckpunkt
+	--     (z. B. Hauptstrasse Ost kreuzt eine Dorfstrasse) -> Knoten mit 4 Armen
+	for i = 1, #LEGS - 1 do
+		for j = i + 1, #LEGS do
+			local A, B = LEGS[i], LEGS[j]
+			local aH = math.abs(A.az - A.bz) < 1
+			local bH = math.abs(B.az - B.bz) < 1
+			if aH ~= bH then
+				local Hh, Vv = A, B
+				if bH then Hh, Vv = B, A end
+				local hz = Hh.az
+				local hx1, hx2 = math.min(Hh.ax, Hh.bx), math.max(Hh.ax, Hh.bx)
+				local vx = Vv.ax
+				local vz1, vz2 = math.min(Vv.az, Vv.bz), math.max(Vv.az, Vv.bz)
+				if vx > hx1 + 1 and vx < hx2 - 1 and hz > vz1 + 1 and hz < vz2 - 1 then
+					local nd = nodeAt(vx, hz)
+					addDir(nd, 1, 0, Hh.hw, Hh.kind)
+					addDir(nd, -1, 0, Hh.hw, Hh.kind)
+					addDir(nd, 0, 1, Vv.hw, Vv.kind)
+					addDir(nd, 0, -1, Vv.hw, Vv.kind)
+				end
+			end
+		end
+	end
+	-- 2c) Kanten an allen Knoten aufteilen
+	local SUB = {}
+	for _, sg in ipairs(LEGS) do
+		local a = { X = sg.ax, Y = sg.az }
+		local b = { X = sg.bx, Y = sg.bz }
+		local hw, kind = sg.hw, sg.kind
+		local dx, dz = b.X - a.X, b.Y - a.Y
+		local L = math.sqrt(dx * dx + dz * dz)
+		local hit = {}
+		for _, nd in ipairs(order) do
+			local t = ((nd.x - a.X) * dx + (nd.z - a.Y) * dz) / (L * L)
+			if t > 0.0005 and t < 0.9995 then
+				local px, pz = a.X + dx * t, a.Y + dz * t
+				local perp = math.abs((nd.x - px) * dz - (nd.z - pz) * dx) / L
+				if perp < 1.5 then hit[#hit + 1] = { t = t, nd = nd } end
+			end
+		end
+		table.sort(hit, function(p, q) return p.t < q.t end)
+		local px, pz = a.X, a.Y
+		for _, h in ipairs(hit) do
+			SUB[#SUB + 1] = { ax = px, az = pz, bx = h.nd.x, bz = h.nd.z, hw = hw, kind = kind }
+			px, pz = h.nd.x, h.nd.z
+		end
+		SUB[#SUB + 1] = { ax = px, az = pz, bx = b.X, bz = b.Y, hw = hw, kind = kind }
 	end
 	for _, sg in ipairs(SUB) do
 		addDir(nodeAt(sg.ax, sg.az), sg.ax - sg.bx, sg.az - sg.bz, sg.hw, sg.kind)
