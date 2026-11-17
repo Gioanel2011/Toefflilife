@@ -1062,6 +1062,11 @@ local SIDEW = COL(184, 188, 194)
 -- Vorlagen werden nach ReplicatedStorage.RoadKit verschoben und von dort geklont.
 ----------------------------------------------------------------
 local KIT_S = 3.0
+-- Kacheln etwas anheben: Terrain-Voxel liegen sonst auf gleicher Hoehe und
+-- stechen als gruene Sprenkel durch den Asphalt.
+local KIT_LIFT = 0.40
+-- Sichtbare halbe Strassenbreite (36er-Kachel) fuer Laternen, Haeuser, Haltestellen
+local KIT_HW = 18
 local KITS = {}
 local KIT_OFF = {}
 do
@@ -1072,7 +1077,7 @@ do
 		local n = 0
 		for _, c in ipairs(f:GetChildren()) do
 			local nm = string.gsub(c.Name, "%s*%(%d+%)$", "")
-			if (c:IsA("Model") or c:IsA("BasePart")) and (string.find(nm, "^Road_") or string.find(nm, "^Bridge_")) then
+			if (c:IsA("Model") or c:IsA("BasePart")) and (string.find(nm, "^Road_") or string.find(nm, "^Bridge_") or string.find(nm, "^Roundabout_")) then
 				KITS[nm] = c
 				if c:IsA("Model") then
 					local bbcf, bbs = c:GetBoundingBox()
@@ -1410,6 +1415,9 @@ for _, R in ipairs(ROADLIST) do
 	local hw, n = def.hw, #R.P
 	local F = folder(def.name, roadsF)
 	local ty = roadSurface(P, hs)
+	-- KIT_ROADS: Kit-Kacheln nur fuer Hauptstrassen (hw >= 8). Dorf- und
+	-- Passstrassen bleiben die schmale prozedurale Platte, sonst passt die
+	-- Breite an Knoten und Kreiseln nicht zusammen.
 	if not KIT_ROADS then
 	-- Fahrbahn + Randstein + Trottoir im Kit-Querschnitt (buendig auf dem Terrain)
 	local acc = 0
@@ -1442,9 +1450,7 @@ for _, R in ipairs(ROADLIST) do
 				-- Doerfliche Nebenstrassen: echte RoadKit-Kacheln STATT der alten
 				-- prozeduralen Platte (nicht darueber) - sobald die Modelle im Place
 				-- sind, ersetzt das Kit die alten Strassen vollstaendig.
-				local kitRoad = KITS["Road_Straight_8x8"] ~= nil
-					and def.kind == "minor" and hw <= 6.8
-					and inVillage(mid.X, mid.Y) and not nearRB(mid.X, mid.Y, 6)
+				local kitRoad = false
 				if not kitRoad then
 					part(F, V3(2 * hw, 2.4, plen), cf * CFrame.new(0, ROAD_TOP - 1.2, 0), ASPH, E.Asphalt)
 				end
@@ -1491,8 +1497,9 @@ for _, R in ipairs(ROADLIST) do
 		end
 		acc = acc + full
 	end
-	-- Kit-Kacheln fuer Dorf-Nebenstrassen (folgen dem Verlauf, jede Kachel aufs Terrain)
-	if KITS["Road_Straight_8x8"] and def.kind == "minor" and hw <= 6.8 then
+	-- KIT_ROADS: keine Kit-Kacheln fuer Nebenstrassen (sonst 24er-Kacheln im
+	-- 36er-Knoten = Ueberlappung und Versatz). Dorfstrassen bleiben prozedural.
+	if (not KIT_ROADS) and KITS["Road_Straight_8x8"] and def.kind == "minor" and hw <= 6.8 then
 		layKitTiles(F, P, hw, function(x, z)
 			return inVillage(x, z) and not nearRB(x, z, 6) and insideNode(x, z) == nil
 		end)
@@ -1551,7 +1558,7 @@ for _, R in ipairs(ROADLIST) do
 			if inVillage(p.X, p.Y) and not nearRB(p.X, p.Y, 14) and not nearTJ(p.X, p.Y, 16) then
 				local t = tangent(P, s)
 				local nr = V2(-t.Y, t.X) * side
-				local lp = p + nr * (hw + 3.9)
+				local lp = p + nr * (KIT_HW + 3.9)
 				lampPost(lampsF, lp.X, surfY(lp.X, lp.Y) + 0.3, lp.Y, p)
 				side = -side
 			end
@@ -1578,10 +1585,16 @@ if KIT_ROADS then
 		"Road_Straight_1Lane_8x8" }) do
 		SOCK[nm] = { { 0, 1 }, { 0, -1 } }
 	end
-	SOCK["Road_T_Junction_8x8"] = { { 1, 0 }, { -1, 0 }, { 0, -1 } }
+	-- Sockets exakt wie in den GLB (SOCKET_N/S/E/W, +Z = S, -Z = N):
+	-- T hat Arme W/E/S, Curve90 hat E/S. Spiegel-Kurve ist damit unnoetig,
+	-- alle vier Ecken entstehen durch Drehung.
+	SOCK["Road_T_Junction_8x8"] = { { 1, 0 }, { -1, 0 }, { 0, 1 } }
 	SOCK["Road_4Way_Junction_8x8"] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
-	SOCK["Road_Curve90_8x8"] = { { 1, 0 }, { 0, -1 } }
-	SOCK["Road_Curve90_8x8_Mirror"] = { { -1, 0 }, { 0, -1 } }
+	SOCK["Road_Curve90_8x8"] = { { 1, 0 }, { 0, 1 } }
+	SOCK["Road_Curve90_8x8_Mirror"] = { { -1, 0 }, { 0, 1 } }
+	-- Gelieferte Kreisel: 3-Arm hat E/W/S, 2-Arm hat S/N
+	SOCK["Roundabout_3Arm_32m"] = { { 1, 0 }, { -1, 0 }, { 0, 1 } }
+	SOCK["Roundabout_2Arm_32m"] = { { 0, 1 }, { 0, -1 } }
 
 	local function rotDir(d, yaw)
 		local c, s = math.cos(yaw), math.sin(yaw)
@@ -1754,7 +1767,7 @@ if KIT_ROADS then
 		local dirs = nd.dirs
 		local nD = #dirs
 		local perp = nD == 2 and math.abs(dirs[1][1] * dirs[2][1] + dirs[1][2] * dirs[2][2]) < 0.3
-		local s = (nd.hw or 6) / 2
+		local s = 4.5   -- einheitliche Kachelbreite (36) fuer alle Strassen
 		nd.half = 4 * s
 		nd.piece = 0
 		do
@@ -1765,7 +1778,7 @@ if KIT_ROADS then
 					name, yaw = "Road_4Way_Junction_8x8", yawFor("Road_4Way_Junction_8x8", dirs)
 				end
 				if yaw then
-					kitPart(name, nd.x, nd.z, surfY(nd.x, nd.z) + 0.06, yaw, s, 1, kF)
+					kitPart(name, nd.x, nd.z, surfY(nd.x, nd.z) + KIT_LIFT, yaw, s, 1, kF)
 					kitJunc = kitJunc + 1
 					nd.piece = nd.half
 				end
@@ -1777,7 +1790,7 @@ if KIT_ROADS then
 					yaw = yawFor(nm, dirs)
 				end
 				if yaw then
-					kitPart(nm, nd.x, nd.z, surfY(nd.x, nd.z) + 0.06, yaw, s, 1, kF)
+					kitPart(nm, nd.x, nd.z, surfY(nd.x, nd.z) + KIT_LIFT, yaw, s, 1, kF)
 					kitCurves = kitCurves + 1
 					nd.piece = nd.half
 				end
@@ -1801,7 +1814,7 @@ if KIT_ROADS then
 			local t0 = na.piece or 0
 			local t1 = nb.piece or 0
 			local usable = L - t0 - t1
-			local s = sg.hw / 2
+			local s = 4.5
 			local tileLen = 8 * s
 			if usable > tileLen * 0.35 then
 				local nT = math.max(1, math.floor(usable / tileLen + 0.5))
@@ -1811,7 +1824,7 @@ if KIT_ROADS then
 				local ys = {}
 				for i = 1, nT do
 					local d = t0 + (i - 0.5) * step
-					ys[i] = surfY(sg.ax + ux * d, sg.az + uz * d) + 0.06
+					ys[i] = surfY(sg.ax + ux * d, sg.az + uz * d) + KIT_LIFT
 				end
 				ys = smooth(ys, 2, 3)
 				local yaw = math.atan2(ux, uz)
@@ -1834,51 +1847,65 @@ if KIT_ROADS then
 		local cx, cz = rb.c.X, rb.c.Y
 		local s = 4.5
 		local arms = RING_ARMS[ri] or {}
-		local function yAt(x, z) return surfY(x, z) + 0.06 end
-		-- Ecken: verbinden je zwei Seiten
-		local corners = {
-			{ x = cx - 72, z = cz - 72, d = { { 1, 0 }, { 0, 1 } } },
-			{ x = cx + 72, z = cz - 72, d = { { -1, 0 }, { 0, 1 } } },
-			{ x = cx + 72, z = cz + 72, d = { { -1, 0 }, { 0, -1 } } },
-			{ x = cx - 72, z = cz + 72, d = { { 1, 0 }, { 0, -1 } } },
-		}
-		for _, c in ipairs(corners) do
-			local nm = "Road_Curve90_8x8"
-			local yaw = yawFor(nm, c.d)
-			if not yaw and KITS["Road_Curve90_8x8_Mirror"] then
-				nm = "Road_Curve90_8x8_Mirror"; yaw = yawFor(nm, c.d)
-			end
-			if yaw then kitPart(nm, c.x, c.z, yAt(c.x, c.z), yaw, s, 1, kF); kitCurves = kitCurves + 1 end
-		end
-		-- Seiten: 3 Kacheln, Ausrichtung entlang der Seite
-		local sides = {
-			{ axis = "x", c = cz - 72, dir = { 1, 0 }, out = { 0, -1 }, arm = arms.S },
-			{ axis = "x", c = cz + 72, dir = { 1, 0 }, out = { 0, 1 }, arm = arms.N },
-			{ axis = "z", c = cx - 72, dir = { 0, 1 }, out = { -1, 0 }, arm = arms.W },
-			{ axis = "z", c = cx + 72, dir = { 0, 1 }, out = { 1, 0 }, arm = arms.E },
-		}
-		for _, sd in ipairs(sides) do
-			for k = -1, 1 do
-				local x, z
-				if sd.axis == "x" then x, z = cx + k * 36, sd.c
-				else x, z = sd.c, cz + k * 36 end
-				local mid = (k == 0)
-				if mid and sd.arm then
-					local want = { sd.dir, { -sd.dir[1], -sd.dir[2] }, sd.out }
-					local yaw = yawFor("Road_T_Junction_8x8", want)
-					if yaw then
-						kitPart("Road_T_Junction_8x8", x, z, yAt(x, z), yaw, s, 1, kF); kitJunc = kitJunc + 1
-					else
-						warn(("[Swiss Map] Kreisel-T ohne passende Drehung bei %.0f, %.0f"):format(x, z))
+		local function yAt(x, z) return surfY(x, z) + KIT_LIFT end
+		-- Ist-Arme aus den echten Strassenenden ableiten (die Daten koennen von
+		-- RING_ARMS abweichen, sonst bleibt ein Arm unverbunden).
+		local dirs = {}
+		for _, R in ipairs(ROADLIST) do
+			for _, idx in ipairs({ 1, #R.P }) do
+				local p = R.P[idx]
+				local dx, dz = p.X - cx, p.Y - cz
+				local dd = math.sqrt(dx * dx + dz * dz)
+				if dd < rb.Rout + 60 and dd > 20 then
+					local u = { dx / dd, dz / dd }
+					local dup = false
+					for _, e in ipairs(dirs) do
+						if e[1] * u[1] + e[2] * u[2] > 0.95 then dup = true; break end
 					end
-				else
-					local yaw = yawFor("Road_Straight_8x8", { sd.dir, { -sd.dir[1], -sd.dir[2] } })
-					if yaw then kitPart("Road_Straight_8x8", x, z, yAt(x, z), yaw, s, 1, kF)
-					else warn(("[Swiss Map] Kreisel-Kachel ohne Drehung bei %.0f, %.0f"):format(x, z)) end
+					if not dup then dirs[#dirs + 1] = u end
 				end
 			end
 		end
-		-- Insel bleibt Terrain/Gras (die Randsteine der Ringkacheln fassen sie ein)
+		local rbName = (#dirs <= 2) and "Roundabout_2Arm_32m" or "Roundabout_3Arm_32m"
+		local rbTpl = KITS[rbName]
+		-- Asphalt-Teller unter der Vorlage: schliesst jede Zufahrt buendig an,
+		-- auch wenn die Vorlage weniger Arme hat als die Strasse.
+		local roadTop = surfY(cx, cz) + KIT_LIFT + 0.05
+		part(kF, V3(2.4, 2 * (rb.Rout + 21), 2 * (rb.Rout + 21)), CFrame.new(cx, roadTop - 1.2, cz) * CFrame.Angles(0, 0, math.pi / 2), COL(62, 64, 70), E.Asphalt, CYL)
+		if rbTpl then
+			local set = SOCK[rbName]
+			local bestK, bestScore = 0, -1
+			for k = 0, 3 do
+				local score = 0
+				for _, w in ipairs(dirs) do
+					for _, d in ipairs(set) do
+						local r = rotDir(d, k * math.pi / 2)
+						if math.abs(r[1] - w[1]) < 0.3 and math.abs(r[2] - w[2]) < 0.3 then
+							score = score + 1
+							break
+						end
+					end
+				end
+				if score > bestScore then bestScore, bestK = score, k end
+			end
+			local yaw = bestK * math.pi / 2
+			local m = rbTpl:Clone()
+			m:ScaleTo(KIT_S * 1.5)
+			for _, d in ipairs(m:GetDescendants()) do
+				if d:IsA("BasePart") then
+					d.Anchored = true
+					d.CanCollide = false
+					d.CastShadow = false
+				end
+			end
+			m.Name = rbName
+			m:PivotTo(CFrame.new(cx, surfY(cx, cz) + KIT_LIFT, cz) * CFrame.Angles(0, yaw, 0))
+			m.Parent = kF
+			kitJunc = kitJunc + 1
+			print(("[Swiss Map] Kreisel %.0f,%.0f: %d Zufahrten, Vorlage %s, Drehung %d Grad, Treffer %d"):format(cx, cz, #dirs, rbName, math.floor(math.deg(yaw) + 0.5), bestScore))
+		else
+			warn("[Swiss Map] Kreisel-Vorlage fehlt: " .. rbName)
+		end
 	end
 
 	print(("[Swiss Map] Kit-Netz: %d Kacheln, %d Kurven, %d Knotenstuecke"):format(kitTilesTotal, kitCurves, kitJunc))
@@ -4109,8 +4136,8 @@ for _, v in ipairs(VILLAGES) do
 					local f = tangent(R.P, i)
 					local nr = V2(-f.Y, f.X)
 					local side = (stops == 0) and 1 or -1
-					local bx = p.X + nr.X * side * (R.def.hw + 14)
-					local bz = p.Y + nr.Y * side * (R.def.hw + 14)
+					local bx = p.X + nr.X * side * (KIT_HW + 14)
+					local bz = p.Y + nr.Y * side * (KIT_HW + 14)
 					if lakeD(bx, bz) > 1.05 and occFree(bx, bz, 14) then
 						local hmin, hmax = math.huge, -math.huge
 						for _, q in ipairs({ { 0, 0 }, { 8, 4 }, { -8, 4 }, { 8, -4 }, { -8, -4 } }) do
@@ -4151,8 +4178,8 @@ for _, v in ipairs(VILLAGES) do
 				if dist2(p.X, p.Y, v.x, v.z) < v.rs then
 					local f = (P[i + 1] - P[i - 1]).Unit
 					local nr = V2(-f.Y, f.X)
-					slots[#slots + 1] = { p = p, nr = nr, side = 1, hw = def.hw }
-					slots[#slots + 1] = { p = p, nr = nr, side = -1, hw = def.hw }
+					slots[#slots + 1] = { p = p, nr = nr, side = 1, hw = 18 }
+					slots[#slots + 1] = { p = p, nr = nr, side = -1, hw = 18 }
 				end
 			end
 		end
