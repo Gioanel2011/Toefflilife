@@ -309,39 +309,44 @@ local ROADS = {
 		V2(216, -918), V2(216, 1710), V2(504, 1710) } },
 	{ name = "Talstrasse West", kind = "main", hw = 9, pts = {
 		V2(414, 1800), V2(-1512, 1800) } },
+	-- Vierter Arm fuer RB1 (4-Arm-Kreisel): fuehrt westwaerts um den See
+	{ name = "Seestrasse", kind = "main", hw = 9, pts = {
+		V2(126, -1008), V2(-720, -1008), V2(-720, -1296) } },
 	{ name = "Talstrasse Ost", kind = "main", hw = 9, pts = {
 		V2(594, 1800), V2(2952, 1800) } },
 	-- ================= DORFSTRASSEN (Kachel 24) =================
 	{ name = "Bahnhofstrasse", kind = "minor", hw = 6, pts = {
 		V2(216, -1152), V2(504, -1152), V2(504, -864) } },
 	{ name = "Moosweg", kind = "minor", hw = 6, pts = {
-		V2(504, -864), V2(216, -864) } },
+		V2(504, -720), V2(504, -864), V2(216, -864) } },
 	{ name = "Kirchweg", kind = "minor", hw = 6, pts = {
-		V2(432, -1008), V2(432, -1152) } },
+		V2(432, -864), V2(432, -1008) } },
 	{ name = "Doenerweg", kind = "minor", hw = 6, pts = {
-		V2(360, -864), V2(360, -780) } },
+		V2(360, -864), V2(360, -720) } },
 	{ name = "Schulhausweg", kind = "minor", hw = 6, pts = {
-		V2(216, -720), V2(360, -720) } },
+		V2(216, -720), V2(504, -720) } },
 	{ name = "Seedorfstrasse", kind = "minor", hw = 6, pts = {
 		V2(-1008, -1296), V2(-1008, -1776) } },
 	{ name = "Muehlegasse", kind = "minor", hw = 6, pts = {
 		V2(-1296, -1296), V2(-1296, -1656), V2(-1008, -1656) } },
 	{ name = "Seerandstrasse", kind = "minor", hw = 6, pts = {
-		V2(-720, -1296), V2(-720, -1656) } },
+		V2(-720, -1296), V2(-720, -1800) } },
+	{ name = "Gasse Ost", kind = "minor", hw = 6, pts = {
+		V2(-1008, -1656), V2(-720, -1656) } },
 	{ name = "Waldstrasse", kind = "minor", hw = 6, pts = {
-		V2(-1008, -1776), V2(-432, -1776) } },
+		V2(-1008, -1800), V2(-432, -1800), V2(-432, -1296) } },
 	{ name = "Dorfplatz", kind = "minor", hw = 6, pts = {
 		V2(144, 1800), V2(144, 1890) } },
 	{ name = "Talweg", kind = "minor", hw = 6, pts = {
-		V2(648, 1800), V2(648, 1656) } },
+		V2(648, 1800), V2(648, 1494), V2(216, 1494) } },
 	{ name = "Bachstrasse", kind = "minor", hw = 6, pts = {
-		V2(288, 1800), V2(288, 1944), V2(720, 1944) } },
+		V2(288, 1800), V2(288, 1944), V2(720, 1944), V2(720, 1800) } },
 	-- ================= BERGSTRASSEN (Kachel 24) =================
-	{ name = "Passstrasse", kind = "pass", hw = 6, topH = 215, pts = {
+	{ name = "Passstrasse", kind = "pass", hw = 6, pts = {
 		V2(2160, 1800), V2(2160, 2088), V2(1440, 2088), V2(1440, 2376),
 		V2(2016, 2376), V2(2016, 2664) } },
-	{ name = "Panoramastrasse", kind = "pass", hw = 6, topH = 250, pts = {
-		V2(2016, 2664), V2(2736, 2664), V2(2736, 2952) } },
+	{ name = "Panoramastrasse", kind = "pass", hw = 6, pts = {
+		V2(2016, 2664), V2(2736, 2664), V2(2736, 1800) } },
 }
 
 local ROADLIST, ALLPTS, rdhash = {}, {}, {}local TJ = {}   -- Einmuendungen (damit dort keine Randlinien durchlaufen)
@@ -671,6 +676,9 @@ for i = 1, NX do
 		end
 		for _, rb in ipairs(RBS) do
 			local dx, dz = x - rb.c.X, z - rb.c.Y
+			local drb = math.sqrt(dx * dx + dz * dz)
+			local rEdge = rb.Rout
+			if drb < rEdge + 40 then h = lerp(h, rb.h, 1 - sstep(rEdge, rEdge + 40, drb)) end
 			if math.abs(dx) < rb.Rout + 4 and math.abs(dz) < rb.Rout + 4 then
 				local d = math.sqrt(dx * dx + dz * dz)
 				if d <= rb.Rout + 0.5 then
@@ -1072,30 +1080,66 @@ local KIT_OFF = {}
 do
 	local rs = game:GetService("ReplicatedStorage")
 	-- Vorlagen sammeln: Modelle ODER einzelne MeshParts, Namen mit " (1)"-Suffix
-	-- werden normalisiert. Beim Import vergibt Studio manchmal solche Namen.
+	-- werden normalisiert. Bei doppelten Namen (grau + texturiert) gewinnt die
+	-- texturierte Vorlage; die graue wird nach ReplicatedStorage.RoadKit_Alt
+	-- verschoben, damit sie nicht in der Karte herumliegt.
+	local ALL = {}     -- nm -> Liste der Kandidaten
+	local function score(c)
+		local n, tex = 0, 0
+		if c:IsA("MeshPart") then
+			n = 1
+			if c.TextureID ~= "" then tex = 1 end
+		end
+		for _, d in ipairs(c:GetDescendants()) do
+			if d:IsA("MeshPart") then
+				n = n + 1
+				if d.TextureID ~= "" then tex = tex + 1 end
+			end
+		end
+		return (tex > 0) and 2 or 1, n
+	end
 	local function collect(f)
-		local n = 0
 		for _, c in ipairs(f:GetChildren()) do
 			local nm = string.gsub(c.Name, "%s*%(%d+%)$", "")
 			if (c:IsA("Model") or c:IsA("BasePart")) and (string.find(nm, "^Road_") or string.find(nm, "^Bridge_") or string.find(nm, "^Roundabout_")) then
-				KITS[nm] = c
-				if c:IsA("Model") then
-					local bbcf, bbs = c:GetBoundingBox()
-					KIT_OFF[nm] = (0 - (bbcf.Position.Y - bbs.Y / 2)) - bbs.Y / 2
-				else
-					KIT_OFF[nm] = (0 - (c.Position.Y - c.Size.Y / 2)) - c.Size.Y / 2
-				end
-				n = n + 1
+				ALL[nm] = ALL[nm] or {}
+				ALL[nm][#ALL[nm] + 1] = c
 			end
 		end
-		return n
 	end
-	local holder = rs:FindFirstChild("RoadKit") or workspace:FindFirstChild("RoadKit")
+	local kitFolder = rs:FindFirstChild("RoadKit")
+	if kitFolder then collect(kitFolder) end
+	collect(workspace)
+	local alt = rs:FindFirstChild("RoadKit_Alt")
 	local n = 0
-	if holder then
-		n = collect(holder)
-	else
-		n = collect(workspace)
+	for nm, list in pairs(ALL) do
+		table.sort(list, function(a, b)
+			local sa, na = score(a)
+			local sb, nb = score(b)
+			if sa ~= sb then return sa > sb end
+			return na > nb
+		end)
+		local best = list[1]
+		KITS[nm] = best
+		if best:IsA("Model") then
+			local bbcf, bbs = best:GetBoundingBox()
+			KIT_OFF[nm] = (0 - (bbcf.Position.Y - bbs.Y / 2)) - bbs.Y / 2
+		else
+			KIT_OFF[nm] = (0 - (best.Position.Y - best.Size.Y / 2)) - best.Size.Y / 2
+		end
+		-- unbenutzte Doppel nach RoadKit_Alt (nur Modelle, nichts loeschen)
+		for i = 2, #list do
+			local dupe = list[i]
+			if dupe:IsA("Model") then
+				if not alt then
+					alt = Instance.new("Folder")
+					alt.Name = "RoadKit_Alt"
+					alt.Parent = rs
+				end
+				dupe.Parent = alt
+			end
+		end
+		n = n + 1
 	end
 	for _, c in pairs(KITS) do
 		for _, d in ipairs(c:GetDescendants()) do
@@ -1112,6 +1156,15 @@ do
 		end
 	end
 	if n > 0 then
+		-- gewaehlte Vorlagen sammeln, damit sie nicht in der Karte herumstehen
+		if not kitFolder then
+			kitFolder = Instance.new("Folder")
+			kitFolder.Name = "RoadKit"
+			kitFolder.Parent = rs
+		end
+		for _, c in pairs(KITS) do
+			if c.Parent ~= kitFolder then c.Parent = kitFolder end
+		end
 		print(("[Swiss Map] RoadKit: %d Vorlagen"):format(n))
 	else
 		warn("[Swiss Map] RoadKit fehlt (0 Vorlagen) - graue Platzhalterkacheln aktiv")
@@ -1595,6 +1648,7 @@ if KIT_ROADS then
 	-- Gelieferte Kreisel: 3-Arm hat E/W/S, 2-Arm hat S/N
 	SOCK["Roundabout_3Arm_32m"] = { { 1, 0 }, { -1, 0 }, { 0, 1 } }
 	SOCK["Roundabout_2Arm_32m"] = { { 0, 1 }, { 0, -1 } }
+	SOCK["Roundabout_4Arm_32m"] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 
 	local function rotDir(d, yaw)
 		local c, s = math.cos(yaw), math.sin(yaw)
@@ -1621,7 +1675,7 @@ if KIT_ROADS then
 
 	-- Kachel mit optionaler Laengsstreckung (kz): Pivot der Modelle liegt am
 	-- Kachelboden in der Mitte, deshalb ohne Hoehen-Offset.
-	local function kitPart(name, x, z, y, yaw, s, kz, parent)
+	local function kitPart(name, x, z, y, yaw, s, kz, parent, pitch)
 		local tpl = KITS[name]
 		if not tpl then
 			kitMissing[name] = (kitMissing[name] or 0) + 1
@@ -1655,7 +1709,7 @@ if KIT_ROADS then
 			d.CanCollide = false
 			d.CastShadow = false
 		end
-		m:PivotTo(CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0))
+		m:PivotTo(CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch or 0, 0, 0))
 		m.Name = name
 		m.Parent = parent or kF
 		kitTilesTotal = kitTilesTotal + 1
@@ -1813,6 +1867,15 @@ if KIT_ROADS then
 			local na, nb = nodeAt(sg.ax, sg.az), nodeAt(sg.bx, sg.bz)
 			local t0 = na.piece or 0
 			local t1 = nb.piece or 0
+			-- Kreisel-Arm: Reihe bis an den Modellrand (74.2) verlängern, statt ein
+			-- gestauchtes Fuellstueck einzusetzen (sonst springen Markierung/Trottoir).
+			local rEdgeGap = 90 - 68   -- bis in den Asphaltring (Modell-Trottoir bei 74.2 ueberdecken)
+			for _, rb in ipairs(RBS) do
+				local da = math.sqrt((na.x - rb.c.X) ^ 2 + (na.z - rb.c.Y) ^ 2)
+				local db = math.sqrt((nb.x - rb.c.X) ^ 2 + (nb.z - rb.c.Y) ^ 2)
+				if math.abs(da - 90) < 20 then t0 = t0 - rEdgeGap end
+				if math.abs(db - 90) < 20 then t1 = t1 - rEdgeGap end
+			end
 			local usable = L - t0 - t1
 			local s = 4.5
 			local tileLen = 8 * s
@@ -1820,18 +1883,19 @@ if KIT_ROADS then
 				local nT = math.max(1, math.floor(usable / tileLen + 0.5))
 				local step = usable / nT
 				local kz = step / tileLen
-				-- Hoehe je Kachel + Glaettung gegen Stufen
-				local ys = {}
-				for i = 1, nT do
-					local d = t0 + (i - 0.5) * step
-					ys[i] = surfY(sg.ax + ux * d, sg.az + uz * d) + KIT_LIFT
-				end
-				ys = smooth(ys, 2, 3)
+				-- Rampe statt Treppe: die ganze Reihe bekommt EINE Steigung
+				-- zwischen den beiden Knotenhoehen; jede Kachel wird zusaetzlich
+				-- um diesen Winkel geneigt. Vorher lag jede Kachel waagerecht auf
+				-- ihrem eigenen Terrainwert -> sichtbare Stufen, nicht befahrbar.
+				local yA = surfY(sg.ax + ux * (t0 + 0.5), sg.az + uz * (t0 + 0.5)) + KIT_LIFT
+				local yB = surfY(sg.bx - ux * (t1 + 0.5), sg.bz - uz * (t1 + 0.5)) + KIT_LIFT
+				local pitch = -math.clamp(math.atan2(yB - yA, math.max(usable, 1)), -0.16, 0.16)  -- +Z muss bergauf zeigen
 				local yaw = math.atan2(ux, uz)
 				for i = 1, nT do
 					local d = t0 + (i - 0.5) * step
 					local x, z = sg.ax + ux * d, sg.az + uz * d
-					kitPart(tileName(sg.kind, x, z), x, z, ys[i], yaw, s, kz)
+					local y = yA + (yB - yA) * ((d - t0) / math.max(usable, 1))
+					kitPart(tileName(sg.kind, x, z), x, z, y, yaw, s, kz, nil, pitch)
 				end
 			end
 		end
@@ -1866,12 +1930,18 @@ if KIT_ROADS then
 				end
 			end
 		end
-		local rbName = (#dirs <= 2) and "Roundabout_2Arm_32m" or "Roundabout_3Arm_32m"
+		local rbName = (#dirs >= 4) and "Roundabout_4Arm_32m" or ((#dirs == 3) and "Roundabout_3Arm_32m" or "Roundabout_2Arm_32m")
 		local rbTpl = KITS[rbName]
-		-- Asphalt-Teller unter der Vorlage: schliesst jede Zufahrt buendig an,
-		-- auch wenn die Vorlage weniger Arme hat als die Strasse.
-		local roadTop = surfY(cx, cz) + KIT_LIFT + 0.05
-		part(kF, V3(2.4, 2 * (rb.Rout + 21), 2 * (rb.Rout + 21)), CFrame.new(cx, roadTop - 1.2, cz) * CFrame.Angles(0, 0, math.pi / 2), COL(62, 64, 70), E.Asphalt, CYL)
+		-- Fahrbahn-Teller unter der Vorlage: die Kreisel-Modelle kommen laut Kit
+		-- "ohne Bodenflaeche", brauchen also eine Asphaltflaeche. Farbe = Palette-
+		-- Asphalt der Kacheln und SmoothPlastic, sonst wirkt er grau gegen die
+		-- texturierten Kacheln; Oberkante 0.02 unter der Kacheloberflaeche.
+		local roadTop = surfY(cx, cz) + KIT_LIFT + 0.02
+		-- Grauen Inselrand (Modell-Randstein) mit Gras ueberdecken
+		part(kF, V3(0.5, 2 * 33.5, 2 * 33.5), CFrame.new(cx, surfY(cx, cz) + KIT_LIFT + 1.18, cz) * CFrame.Angles(0, 0, math.pi / 2), COL(124, 154, 107), E.Grass, CYL)
+		-- Die Kreisel-Vorlage bringt Asphaltring, Markierungen und Grasinsel mit
+		-- (gemessen: Asphalt R 7.5..16.1 m, Gras R 0..7.2 m). Bei 1.25x reicht sie
+		-- bis 92.7 Studs, die Zufahrten enden bei 90 -> kein Teller noetig.
 		if rbTpl then
 			local set = SOCK[rbName]
 			local bestK, bestScore = 0, -1
@@ -1890,7 +1960,7 @@ if KIT_ROADS then
 			end
 			local yaw = bestK * math.pi / 2
 			local m = rbTpl:Clone()
-			m:ScaleTo(KIT_S * 1.5)
+			m:ScaleTo(KIT_S * 1.5)   -- 1.0x = 32 m, Rand 74.2 Studs
 			for _, d in ipairs(m:GetDescendants()) do
 				if d:IsA("BasePart") then
 					d.Anchored = true
