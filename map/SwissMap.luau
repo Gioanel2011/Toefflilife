@@ -30,6 +30,10 @@ local NX, NZ = SIZEX / VOX, SIZEZ / VOX             -- 2500 x 2000 Zellen
 local BASEY, NY = -32, 104       -- Terrain geht von y=-32 bis y=384
 local WL = 4                     -- Wasserspiegel (See)
 local BLEND = 34                 -- Boeschungsbreite neben Strassen
+-- Kacheln sind 36 Studs breit (8 m * 4.5). Bis zur Kachelkante muss das
+-- Terrain exakt auf Strassenhoehe liegen, sonst schiebt sich am Hang die
+-- Boeschung durch die Kachel (gemessen bis +12 an der Panoramastrasse).
+local ROAD_FLAT = 19             -- 36/2 + 1 Stud Reserve
 local TREE_COUNT = 4800          -- Anzahl Tannen (3x)
 local GARAGE_COUNT = 15          -- 1 Garage pro Spieler
 local GARAGE_NUMBERS = true      -- kleine Nummernschilder an den Garagen
@@ -669,8 +673,8 @@ for i = 1, NX do
 		local z = -HALFZ + (k - 0.5) * VOX
 		local h = terrainH(x, z)
 		local d, rh, hw = roadQuery(x, z)
-		if d and d < hw + BLEND then
-			h = lerp(h, rh, 1 - sstep(hw, hw + BLEND, d))
+		if d and d < ROAD_FLAT + BLEND then
+			h = lerp(h, rh, 1 - sstep(ROAD_FLAT, ROAD_FLAT + BLEND, d))
 			if d <= hw + 0.5 then Ri[k] = 1
 			elseif d <= hw + 3.5 then Ri[k] = 2 end
 		end
@@ -679,14 +683,11 @@ for i = 1, NX do
 			local drb = math.sqrt(dx * dx + dz * dz)
 			local rEdge = rb.Rout
 			if drb < rEdge + 40 then h = lerp(h, rb.h, 1 - sstep(rEdge, rEdge + 40, drb)) end
-			if math.abs(dx) < rb.Rout + 4 and math.abs(dz) < rb.Rout + 4 then
-				local d = math.sqrt(dx * dx + dz * dz)
-				if d <= rb.Rout + 0.5 then
-					if d >= rb.Rin - 0.5 then Ri[k] = 1 else Ri[k] = nil end
-				elseif d <= rb.Rout + 3.5 and not Ri[k] then
-					Ri[k] = 2
-				end
-			end
+			-- Terrainfarbe nur bis unter den Modellrand: das Trottoir der Vorlage
+			-- endet bei R 63. Weiter draussen bleibt Gras - sonst schaut in den
+			-- vier Ecken zwischen den Armen ein graues Quadrat heraus. Asphalt
+			-- verhindert ausserdem Grasbueschel mitten auf dem Ring.
+			if drb <= 64 then Ri[k] = 1 end
 		end
 		Hi[k] = h
 	end
@@ -1675,6 +1676,7 @@ if KIT_ROADS then
 
 	-- Kachel mit optionaler Laengsstreckung (kz): Pivot der Modelle liegt am
 	-- Kachelboden in der Mitte, deshalb ohne Hoehen-Offset.
+	local TILEAT = {}   -- belegte Kacheln je 36er-Raster (Name), fuer Naht-Fuellstuecke
 	local function kitPart(name, x, z, y, yaw, s, kz, parent, pitch)
 		local tpl = KITS[name]
 		if not tpl then
@@ -1712,6 +1714,7 @@ if KIT_ROADS then
 		m:PivotTo(CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch or 0, 0, 0))
 		m.Name = name
 		m.Parent = parent or kF
+		TILEAT[math.floor(x / 2 + 0.5) .. "|" .. math.floor(z / 2 + 0.5)] = name
 		kitTilesTotal = kitTilesTotal + 1
 		pace(60)
 		return m
@@ -1817,6 +1820,7 @@ if KIT_ROADS then
 		end
 		return false
 	end
+	local TJLIST = {}
 	for _, nd in ipairs(order) do
 		local dirs = nd.dirs
 		local nD = #dirs
@@ -1835,6 +1839,9 @@ if KIT_ROADS then
 					kitPart(name, nd.x, nd.z, surfY(nd.x, nd.z) + KIT_LIFT, yaw, s, 1, kF)
 					kitJunc = kitJunc + 1
 					nd.piece = nd.half
+					if name == "Road_T_Junction_8x8" then
+						TJLIST[#TJLIST + 1] = { x = nd.x, z = nd.z, dirs = dirs }
+					end
 				end
 			elseif nD == 2 and perp then
 				local yaw = yawFor("Road_Curve90_8x8", dirs)
@@ -1867,7 +1874,7 @@ if KIT_ROADS then
 			local na, nb = nodeAt(sg.ax, sg.az), nodeAt(sg.bx, sg.bz)
 			local t0 = na.piece or 0
 			local t1 = nb.piece or 0
-			-- Kreisel-Arm: Reihe bis an den Modellrand (74.2) verlängern, statt ein
+			-- Kreisel-Arm: Reihe bis an den Modellrand (74.2) verlï¿½ngern, statt ein
 			-- gestauchtes Fuellstueck einzusetzen (sonst springen Markierung/Trottoir).
 			local rEdgeGap = 90 - 68   -- bis in den Asphaltring (Modell-Trottoir bei 74.2 ueberdecken)
 			for _, rb in ipairs(RBS) do
@@ -1883,19 +1890,66 @@ if KIT_ROADS then
 				local nT = math.max(1, math.floor(usable / tileLen + 0.5))
 				local step = usable / nT
 				local kz = step / tileLen
-				-- Rampe statt Treppe: die ganze Reihe bekommt EINE Steigung
-				-- zwischen den beiden Knotenhoehen; jede Kachel wird zusaetzlich
-				-- um diesen Winkel geneigt. Vorher lag jede Kachel waagerecht auf
-				-- ihrem eigenen Terrainwert -> sichtbare Stufen, nicht befahrbar.
-				local yA = surfY(sg.ax + ux * (t0 + 0.5), sg.az + uz * (t0 + 0.5)) + KIT_LIFT
-				local yB = surfY(sg.bx - ux * (t1 + 0.5), sg.bz - uz * (t1 + 0.5)) + KIT_LIFT
-				local pitch = -math.clamp(math.atan2(yB - yA, math.max(usable, 1)), -0.16, 0.16)  -- +Z muss bergauf zeigen
+				-- Rampe statt Treppe: die Kacheln folgen dem flachgezogenen
+				-- Gelaende. Frueher lag die ganze Reihe auf EINER Sehne zwischen
+				-- den beiden Knotenhoehen; ein Buckel dazwischen (gemessen +9 an
+				-- der Panoramastrasse) schob das Terrain durch die Kachel.
+				-- Jetzt wird die Hoehe an jeder Kachelgrenze aus dem Gelaende
+				-- gelesen, die Kachel dazwischen gerade geneigt (keine Stufen).
+				local ys = {}
+				for i = 0, nT do
+					local ds = t0 + i * step
+					ys[i + 1] = surfY(sg.ax + ux * ds, sg.az + uz * ds) + KIT_LIFT
+				end
 				local yaw = math.atan2(ux, uz)
 				for i = 1, nT do
 					local d = t0 + (i - 0.5) * step
 					local x, z = sg.ax + ux * d, sg.az + uz * d
-					local y = yA + (yB - yA) * ((d - t0) / math.max(usable, 1))
-					kitPart(tileName(sg.kind, x, z), x, z, y, yaw, s, kz, nil, pitch)
+					local ya, yb = ys[i], ys[i + 1]
+					local pitch = -math.clamp(math.atan2(yb - ya, step), -0.16, 0.16)  -- +Z muss bergauf zeigen
+					kitPart(tileName(sg.kind, x, z), x, z, (ya + yb) / 2, yaw, s, kz, nil, pitch)
+				end
+			end
+		end
+	end
+
+	-- 4b) T-Stoss: die T-Kachel hat am geschlossenen Arm ein 9 breites Trottoir
+	--     (Kante 9 ab Mitte), die gerade Kachel nur 7,65 (Kante 10,35). An
+	--     beiden Nahtstellen springt die Kante daher 1,35 Studs und fast 1
+	--     Stud in der Hoehe. Zwei flache Streifen auf der Nachbarkachel ziehen
+	--     die Kante aus (Kacheln selbst bleiben unveraendert).
+	for _, t in ipairs(TJLIST) do
+		local closed
+		for _, c in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+			local used = false
+			for _, a in ipairs(t.dirs) do
+				if a[1] * c[1] + a[2] * c[2] > 0.9 then used = true; break end
+			end
+			if not used then closed = c; break end
+		end
+		if closed then
+			for _, d in ipairs(t.dirs) do
+				local through = false
+				for _, e in ipairs(t.dirs) do
+					if e ~= d and d[1] * e[1] + d[2] * e[2] < -0.9 then through = true end
+				end
+				local nx, nz = t.x + d[1] * 36, t.z + d[2] * 36
+				local nm = TILEAT[math.floor(nx / 2 + 0.5) .. "|" .. math.floor(nz / 2 + 0.5)]
+				if through and nm and string.find(nm, "Straight") and not string.find(nm, "Grass") then
+					local qx, qz = -d[2], d[1]
+					if qx * closed[1] + qz * closed[2] < 0 then qx, qz = -qx, -qz end
+					local yaw = math.atan2(d[1], d[2])
+					-- 6 Studs volle Breite (9,0..10,4), dann 6 Studs schmal (9,6..10,4);
+					-- 0,05 Ueberlappung, damit keine Fugen entstehen.
+					for _, st in ipairs({ { 17.95, 23.95, 1.45, 9.675 }, { 23.90, 29.90, 0.80, 10.0 } }) do
+						local s0, s1, w, lat = st[1], st[2], st[3], st[4]
+						local sm = (s0 + s1) / 2
+						local px = t.x + d[1] * sm + qx * lat
+						local pz = t.z + d[2] * sm + qz * lat
+						local top = surfY(px, pz) + KIT_LIFT + 1.11
+						part(kF, V3(w, 1.5, s1 - s0), CFrame.new(px, top - 0.75, pz) * CFrame.Angles(0, yaw, 0),
+							COL(205, 205, 208), E.Concrete, nil, false)
+					end
 				end
 			end
 		end
@@ -1932,13 +1986,6 @@ if KIT_ROADS then
 		end
 		local rbName = (#dirs >= 4) and "Roundabout_4Arm_32m" or ((#dirs == 3) and "Roundabout_3Arm_32m" or "Roundabout_2Arm_32m")
 		local rbTpl = KITS[rbName]
-		-- Fahrbahn-Teller unter der Vorlage: die Kreisel-Modelle kommen laut Kit
-		-- "ohne Bodenflaeche", brauchen also eine Asphaltflaeche. Farbe = Palette-
-		-- Asphalt der Kacheln und SmoothPlastic, sonst wirkt er grau gegen die
-		-- texturierten Kacheln; Oberkante 0.02 unter der Kacheloberflaeche.
-		local roadTop = surfY(cx, cz) + KIT_LIFT + 0.02
-		-- Grauen Inselrand (Modell-Randstein) mit Gras ueberdecken
-		part(kF, V3(0.5, 2 * 33.5, 2 * 33.5), CFrame.new(cx, surfY(cx, cz) + KIT_LIFT + 1.18, cz) * CFrame.Angles(0, 0, math.pi / 2), COL(124, 154, 107), E.Grass, CYL)
 		-- Die Kreisel-Vorlage bringt Asphaltring, Markierungen und Grasinsel mit
 		-- (gemessen: Asphalt R 7.5..16.1 m, Gras R 0..7.2 m). Bei 1.25x reicht sie
 		-- bis 92.7 Studs, die Zufahrten enden bei 90 -> kein Teller noetig.
@@ -1971,6 +2018,18 @@ if KIT_ROADS then
 			m.Name = rbName
 			m:PivotTo(CFrame.new(cx, surfY(cx, cz) + KIT_LIFT, cz) * CFrame.Angles(0, yaw, 0))
 			m.Parent = kF
+			-- Grasflaeche auf die Modell-Insel. Im Place gemessen (RB1/RB2, je 24
+			-- Winkel): Insel-Oberkante +1.125 ueber Pivot, Modell-Gras endet bei
+			-- 32.4, Randstein-Schraege 32.4..36.0, Asphalt ab 36.0. Beides folgt
+			-- direkt aus der Vorlage: 36.0 = BBox.X/4 (8 m * 4.5), 1.125 =
+			-- BBox.X/128 (0.25 m * 4.5). Die alte Scheibe (R 33.5, Oberkante
+			-- +1.43) war zu klein und lag zu hoch, deshalb blieb der graue
+			-- Randstein als Ring sichtbar.
+			local _, bbSize = m:GetBoundingBox()
+			local discR = bbSize.X / 4 + 0.15
+			local discTop = surfY(cx, cz) + KIT_LIFT + bbSize.X / 128 + 0.03
+			local discH = 1.6
+			upright(kF, V3(cx, discTop - discH, cz), discH, discR * 2, COL(124, 154, 107), E.Grass, false)
 			kitJunc = kitJunc + 1
 			print(("[Swiss Map] Kreisel %.0f,%.0f: %d Zufahrten, Vorlage %s, Drehung %d Grad, Treffer %d"):format(cx, cz, #dirs, rbName, math.floor(math.deg(yaw) + 0.5), bestScore))
 		else
@@ -2796,7 +2855,7 @@ local function buildHouse(parent, pos, yaw, S)
 	part(m, V3(3.6, 0.2, 5.4), fr.front * CFrame.new(doorU, 0.1, -5.4), STONE, E.Cobblestone)
 	-- Kiesweg vom Eingang bis zum Trottoir (auf die echte Terrainhoehe gesetzt)
 	do
-		local plen = math.max(3, lot - 2.4)
+		local plen = math.max(3, lot - 0.4)
 		local wp = (fr.front * CFrame.new(doorU, 0, -(0.5 + plen / 2))).Position
 		local gy = surfY(wp.X, wp.Z)
 		part(m, V3(3.4, 0.16, plen), CFrame.new(wp.X, gy + 0.12, wp.Z) * CFrame.Angles(0, yaw, 0), COL(178, 170, 154), E.Ground)
@@ -2900,8 +2959,8 @@ local function buildBusStop(parent, x, z, yaw)
 	part(parent, V3(3.4, 0.9, 0.35), CFrame.new(bp.X, y + 11.9, bp.Z) * CFrame.Angles(0, yaw, 0), COL(248, 198, 42), E.SmoothPlastic)
 end
 
-local function buildVillageSquare(parent, v, x, z, yaw)
-	local gh = math.max(heightAt(x, z), v.h)
+local function buildVillageSquare(parent, v, x, z, yaw, ghOverride)
+	local gh = ghOverride or math.max(heightAt(x, z), v.h)
 	local sy = gh + 1.5
 	local b = CFrame.new(x, gh, z) * CFrame.Angles(0, yaw, 0)
 	-- Sockel + Kopfsteinpflaster (etwas ueber dem Terrain, damit nichts versinkt)
@@ -3519,7 +3578,20 @@ local function buildDoener(parent, x, y, z, yaw)
 	-- Boden + Platz
 	part(m, V3(W + 1.5, 8, D + 1.5), base * CFrame.new(0, -3, 0), STONE, E.Concrete)
 	part(m, V3(W - 1.6, 0.2, D - 1.6), base * CFrame.new(0, 1.1, 0), COL(226, 220, 208), E.Marble)
-	part(m, V3(W + 20, 3.0, 30), base * CFrame.new(0, -0.5, D / 2 + 0.75 + 15), COL(170, 166, 160), E.Cobblestone)
+	-- Vorplatz endet an der Trottoirkante (Kachelrand), nicht im Trottoir:
+	-- sonst schneidet die Platte mehrere Studs in das weisse Trottoirband.
+	local padFront = D / 2 + 0.75 + 30
+	do
+		local rp, rd = nearestRoadPt(x, z)
+		if rp and rd and rd > 20 then
+			local fz = base:VectorToWorldSpace(V3(0, 0, 1))
+			if (fz.X * (rp[1] - x) + fz.Z * (rp[2] - z)) / rd > 0.9 then
+				padFront = math.min(padFront, rd - 18 + 0.05)   -- 0,05 in die Kachel
+			end
+		end
+	end
+	local padDepth = math.max(6, padFront - (D / 2 + 0.75))
+	part(m, V3(W + 20, 3.0, padDepth), base * CFrame.new(0, -0.5, D / 2 + 0.75 + padDepth / 2), COL(170, 166, 160), E.Cobblestone)
 	-- Waende
 	part(m, V3(W, H, 0.8), base * CFrame.new(0, 1 + H / 2, -D / 2 + 0.4), wallC)
 	part(m, V3(0.8, H, D), base * CFrame.new(-W / 2 + 0.4, 1 + H / 2, 0), wallC)
@@ -4131,7 +4203,19 @@ do
 	if gy == -math.huge then gy = DONER.h end
 	buildToeffliShop(buildingsF, shopX, gy + 0.55, shopZ, DONER.yaw)
 	occAdd(shopX, shopZ, 22)
-	connectToRoad(buildingsF, shopX, shopZ, 14, 7)
+	-- Vorplatz: Pflaster vom Laden bis zur Trottoirkante, gleiche Hoehe wie beim
+	-- Doener. Ersetzt den schmalen Kiesweg (nur 7 breit) durch eine echte Flaeche.
+	do
+		local zTop = DONER.h + 1.0
+		local xFront = shopX - 8          -- Fassade des Toeffli-Ladens
+		local rp, rd = nearestRoadPt(shopX, shopZ)
+		local xKerb = xFront - 30
+		if rp and rd and rd > 24 and rp[1] < shopX then xKerb = rp[1] + 18 end
+		xKerb = math.min(xKerb, xFront - 6)
+		local len = xFront - (xKerb - 0.05)
+		part(buildingsF, V3(len, 0.7, 24), CFrame.new(xFront - len / 2, zTop - 0.35, shopZ + 1),
+			COL(170, 166, 160), E.Cobblestone)
+	end
 end
 do
 	local sp = Instance.new("SpawnLocation")
@@ -4274,11 +4358,11 @@ for _, v in ipairs(VILLAGES) do
 		else
 			local S = rollHouse(blockRoof)
 			if S then
-				local off = s.hw + 3.2 + 9.8 + S.D / 2
+				local off = s.hw + 8 + S.D / 2
 				local x = s.p.X + s.nr.X * s.side * off
 				local z = s.p.Y + s.nr.Y * s.side * off
 				local yaw = math.atan2(-s.nr.X * s.side, -s.nr.Y * s.side)
-				S.lot = 9.8
+				S.lot = 7.6
 				local ok = dist2(x, z, v.x, v.z) < v.rf + 12 * WS
 					and occFreeRect(x, z, S.W / 2 + 3.0, S.D / 2 + 3.0, yaw)
 					and lakeD(x, z) > 1.1
@@ -4401,6 +4485,14 @@ for _, v in ipairs(VILLAGES) do
 		end
 	end
 	if done then print(("[Swiss Map] Dorfplatz in %s"):format(v.name)) end
+end
+-- Der Dorfplatz-Stummel (144,1890) endet im Gras: Platz direkt ans Strassenende.
+do
+	local px, pz = 144, 1911
+	local gh = surfY(144, 1884) - 0.95   -- Platzoberkante ~0,15 ueber dem Asphalt
+	buildVillageSquare(lifeF, { h = gh }, px, pz, 0, gh)
+	occAddRect(px, pz, 29, 23, 0)
+	nSquares = nSquares + 1
 end
 print(("[Swiss Map] %d Dorfplaetze"):format(nSquares))
 
