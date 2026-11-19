@@ -675,8 +675,14 @@ for i = 1, NX do
 		local d, rh, hw = roadQuery(x, z)
 		if d and d < ROAD_FLAT + BLEND then
 			h = lerp(h, rh, 1 - sstep(ROAD_FLAT, ROAD_FLAT + BLEND, d))
-			if d <= hw + 0.5 then Ri[k] = 1
-			elseif d <= hw + 3.5 then Ri[k] = 2 end
+			-- Kit-Netz: die Kacheln sind 24 Studs breit (hw 12) und liegen genau
+			-- auf der Achse. Das normale Band (hw + 0.5) war 2 Studs zu schmal,
+			-- deshalb schaute Gras unter dem Trottoir heraus (Kachelrand bei
+			-- +-12, Asphalt endete bei +-10).
+			local aEdge, pEdge = hw + 0.5, hw + 3.5
+			if KIT_ROADS then aEdge, pEdge = 13, 15.5 end
+			if d <= aEdge then Ri[k] = 1
+			elseif d <= pEdge then Ri[k] = 2 end
 		end
 		for _, rb in ipairs(RBS) do
 			local dx, dz = x - rb.c.X, z - rb.c.Y
@@ -1071,9 +1077,14 @@ local SIDEW = COL(184, 188, 194)
 -- Vorlagen werden nach ReplicatedStorage.RoadKit verschoben und von dort geklont.
 ----------------------------------------------------------------
 local KIT_S = 3.0
--- Kacheln etwas anheben: Terrain-Voxel liegen sonst auf gleicher Hoehe und
--- stechen als gruene Sprenkel durch den Asphalt.
+-- Hoehe der Kacheln ueber dem Terrain. 0.40 war im Place gemessen in Ordnung
+-- (Asphalt 0.45 ueber Terrain, Trottoir 1.57) - tiefer legen liess die Kacheln
+-- im Boden verschwinden, deshalb bleibt der Wert. Die Kollision der Kacheln
+-- (CanCollide, Precise) sorgt dafuer, dass der Spieler auf dem Belag laeuft
+-- statt auf dem Terrain darunter.
 local KIT_LIFT = 0.40
+-- Kreisel-Vorlagen bekommen denselben Versatz wie die Kacheln.
+local RB_LIFT = KIT_LIFT
 -- Sichtbare halbe Strassenbreite (36er-Kachel) fuer Laternen, Haeuser, Haltestellen
 local KIT_HW = 18
 local KITS = {}
@@ -1146,15 +1157,28 @@ do
 		for _, d in ipairs(c:GetDescendants()) do
 			if d:IsA("BasePart") then
 				d.Anchored = true
-				d.CanCollide = false
+				d.CanCollide = true
 				d.CastShadow = false
 			end
 		end
 		if c:IsA("BasePart") then
 			c.Anchored = true
-			c.CanCollide = false
+			c.CanCollide = true
 			c.CastShadow = false
 		end
+		-- Kollision der Vorlage: PreciseConvexDecomposition MUSS hier auf der
+		-- Vorlage gesetzt werden. Bei einem frischen Klon ausserhalb des
+		-- DataModels ignoriert Roblox den Wert stillschweigend (getestet);
+		-- der Klon erbt dagegen von der Vorlage.
+		for _, d in ipairs(c:GetDescendants()) do
+			if d:IsA("MeshPart") then
+				pcall(function() d.CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition end)
+			end
+		end
+		if c:IsA("MeshPart") then
+			pcall(function() c.CollisionFidelity = Enum.CollisionFidelity.PreciseConvexDecomposition end)
+		end
+		task.wait(0.1)
 	end
 	if n > 0 then
 		-- gewaehlte Vorlagen sammeln, damit sie nicht in der Karte herumstehen
@@ -1646,8 +1670,12 @@ if KIT_ROADS then
 	SOCK["Road_4Way_Junction_8x8"] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 	SOCK["Road_Curve90_8x8"] = { { 1, 0 }, { 0, 1 } }
 	SOCK["Road_Curve90_8x8_Mirror"] = { { -1, 0 }, { 0, 1 } }
-	-- Gelieferte Kreisel: 3-Arm hat E/W/S, 2-Arm hat S/N
-	SOCK["Roundabout_3Arm_32m"] = { { 1, 0 }, { -1, 0 }, { 0, 1 } }
+	-- Gelieferte Kreisel: im Place gemessen (Raycast bei r = 68..71 vom Zentrum)
+	-- hat der 3-Arm seine Arme N/E/W - nicht S, wie im GLB-Namen SOCKET_S
+	-- vermuten laesst. Mit E/W/S wurde RB2 um 180 Grad verdreht gesetzt: der
+	-- Nordarm der Strasse traf auf die geschlossene Seite, und der Modell-Arm
+	-- stand als Stummel nach Sueden in der Wiese.
+	SOCK["Roundabout_3Arm_32m"] = { { 1, 0 }, { -1, 0 }, { 0, -1 } }
 	SOCK["Roundabout_2Arm_32m"] = { { 0, 1 }, { 0, -1 } }
 	SOCK["Roundabout_4Arm_32m"] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }
 
@@ -1707,8 +1735,11 @@ if KIT_ROADS then
 			local p = rel.Position
 			d.Size = Vector3.new(d.Size.X * s, d.Size.Y * s, d.Size.Z * s * k)
 			d.CFrame = piv * CFrame.new(p.X * s, p.Y * s, p.Z * s * k) * rel.Rotation
+			-- Kollision an: sonst steht der Spieler auf dem Terrain und laeuft
+			-- durch Trottoir und Randstein. Die Fidelity (Precise) erbt der
+			-- Klon von der Vorlage - siehe Vorlagen-Schleife oben.
 			d.Anchored = true
-			d.CanCollide = false
+			d.CanCollide = true
 			d.CastShadow = false
 		end
 		m:PivotTo(CFrame.new(x, y, z) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch or 0, 0, 0))
@@ -1965,7 +1996,7 @@ if KIT_ROADS then
 		local cx, cz = rb.c.X, rb.c.Y
 		local s = 4.5
 		local arms = RING_ARMS[ri] or {}
-		local function yAt(x, z) return surfY(x, z) + KIT_LIFT end
+		local function yAt(x, z) return surfY(x, z) + RB_LIFT end
 		-- Ist-Arme aus den echten Strassenenden ableiten (die Daten koennen von
 		-- RING_ARMS abweichen, sonst bleibt ein Arm unverbunden).
 		local dirs = {}
@@ -2011,12 +2042,12 @@ if KIT_ROADS then
 			for _, d in ipairs(m:GetDescendants()) do
 				if d:IsA("BasePart") then
 					d.Anchored = true
-					d.CanCollide = false
+					d.CanCollide = true
 					d.CastShadow = false
 				end
 			end
 			m.Name = rbName
-			m:PivotTo(CFrame.new(cx, surfY(cx, cz) + KIT_LIFT, cz) * CFrame.Angles(0, yaw, 0))
+			m:PivotTo(CFrame.new(cx, surfY(cx, cz) + RB_LIFT, cz) * CFrame.Angles(0, yaw, 0))
 			m.Parent = kF
 			-- Grasflaeche auf die Modell-Insel. Im Place gemessen (RB1/RB2, je 24
 			-- Winkel): Insel-Oberkante +1.125 ueber Pivot, Modell-Gras endet bei
@@ -2027,7 +2058,7 @@ if KIT_ROADS then
 			-- Randstein als Ring sichtbar.
 			local _, bbSize = m:GetBoundingBox()
 			local discR = bbSize.X / 4 + 0.15
-			local discTop = surfY(cx, cz) + KIT_LIFT + bbSize.X / 128 + 0.03
+			local discTop = surfY(cx, cz) + RB_LIFT + bbSize.X / 128 + 0.03
 			local discH = 1.6
 			upright(kF, V3(cx, discTop - discH, cz), discH, discR * 2, COL(124, 154, 107), E.Grass, false)
 			kitJunc = kitJunc + 1
@@ -4747,6 +4778,58 @@ end
 
 for _, T in ipairs(treeT) do T.part:Destroy() end
 if spireTemplate then spireTemplate.part:Destroy() end
+
+---------------------------------------------------------------
+-- TERRAIN UNTER GEBAEUDEN: kein Gras durch Boden und Terrasse
+-- Unter Strassenkacheln erledigt das schon das erweiterte Asphaltband im
+-- Material-Gitter (aEdge = 13 statt hw + 0.5). Unter Haeusern, Laeden, Garagen
+-- und Kirche wird nach dem Bau Gras -> Erde umgeschrieben. Die Region wird auf
+-- das 4er-Voxelraster ausgerichtet (ReplaceMaterial verlangt das) und bewusst
+-- nach innen gerundet, damit kein Erdstreifen neben den Fassaden entsteht.
+---------------------------------------------------------------
+do
+	local paintedBuildings, failed = 0, 0
+	local function paintFootprint(m, target)
+		local ok, cf, sz = pcall(function()
+			local c, s = m:GetBoundingBox()
+			return c, s
+		end)
+		if not ok or not cf or sz.X < 3 or sz.Z < 3 then return false end
+		local g = surfY(cf.X, cf.Z)
+		if g == nil then failed = failed + 1; return false end
+		local x0 = math.ceil((cf.X - sz.X / 2) / 4) * 4
+		local x1 = math.floor((cf.X + sz.X / 2) / 4) * 4
+		local z0 = math.ceil((cf.Z - sz.Z / 2) / 4) * 4
+		local z1 = math.floor((cf.Z + sz.Z / 2) / 4) * 4
+		local y0 = math.floor((g - 6) / 4) * 4
+		local y1 = math.ceil((g + 6) / 4) * 4
+		if x1 - x0 < 4 or z1 - z0 < 4 then return false end
+		local reg = Region3.new(V3(x0, y0, z0), V3(x1, y1, z1))
+		local ok2 = pcall(function()
+			terrain:ReplaceMaterial(reg, 4, E.Grass, target)
+			terrain:ReplaceMaterial(reg, 4, E.LeafyGrass, target)
+		end)
+		if not ok2 then failed = failed + 1; return false end
+		return true
+	end
+	-- unter Gebaeuden: Erde statt Gras (keine Bueschel durch Boden/Terrasse)
+	for _, fname in ipairs({ "Haeuser", "Laeden", "Garagen", "Gebaeude" }) do
+		local f = map:FindFirstChild(fname)
+		if f then
+			local n = 0
+			for _, m in ipairs(f:GetDescendants()) do
+				if m:IsA("Model") and not m.Parent:IsA("Model") then
+					if paintFootprint(m, E.Ground) then paintedBuildings = paintedBuildings + 1 end
+				end
+				n = n + 1
+				if n % 30 == 0 then task.wait() end
+			end
+		end
+	end
+	print(("[Swiss Map] Terrain unter Gebaeuden: %d Flaechen auf Erde%s"):format(
+		paintedBuildings, failed > 0 and (", %d fehlgeschlagen"):format(failed) or ""))
+end
+
 
 -- Performance: grosse Deko-Flächen werfen keine Schatten (45k Haeuserteile bleiben Schattenwerfer)
 for _, name in ipairs({ "Strassen", "Baeume", "Aecker", "Kuhweiden", "Laternen", "Schilder" }) do

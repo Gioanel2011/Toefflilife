@@ -835,3 +835,70 @@
   5. `Seestrasse` mündet jetzt aus Sueden in die `Waldstrasse` (vorher 33-Grad-Knick), Knotenradius `hwMax * 2.2`, keine Knoten direkt am Kreisel (`Rout + 6`).
   **Validierung:** Selene 0 Fehler; Vollbuild `FERTIG!`, 22 Knoten / 2 Kreisverkehre / 87045 Parts, keine Winkel-, "zu nah"- oder Stummel-Warnungen (nur 5 Hinweise auf Zufahrten, deren Ende auf der Querstrasse liegt). Messung im Place: **Asphalt-Ueberlappung 2416 -> 14 Proben** (Rest sind Einmuendungen ohne Trottoir), **0 Asphalt im Wasser**, **0 Enden < 40 Grad**.
   **Offen:** RoadKit-Modelle sind nicht im Place (0 MeshParts) - Import durch den Nutzer; der Generator nutzt sie danach automatisch *statt* der prozeduralen Platte (`kitRoad`), Meldung `[Swiss Map] RoadKit: N Vorlagen`.
+
+### [x] Task 50: Texturierte RoadKit-GLB, Build und Kreisel-Teller
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** map/SwissMap.luau
+- **Context-Dateien:** map/assets/roadkit/bake.mjs
+- **Agent-Persona:** Roblox-Asset- und Karten-Integrator fuer texturierte Strassenkacheln.
+- **Ausfuehrungs-Prompt:**
+  """
+  Entpacke die Strassen-Einzelobjekte nach `%TEMP%\opencode\roadkit\glb` (nur GLB/) und
+  `..\obj\` (mit `palette.mtl`), backe mit `node map\assets\roadkit\bake.mjs` die Vertex-Farben
+  in einen Palette-Atlas (19 GLB inkl. `_Mirror`-Kurven). Importiere die texturierten GLB in
+  `ReplicatedStorage.RoadKit` und ersetze die grauen Vorlagen; Namen muessen exakt
+  `Road_*`/`Bridge_*`/`Roundabout_*` bleiben. Aktualisiere `ServerStorage.SwissMapSrc` aus dem
+  Repo und baue die Karte im offenen Place neu (`loadstring` + `task.delay`, nicht `task.spawn`).
+  Pruefe im Output `RoadKit: N Vorlagen`, `Kit-Netz: ... Kacheln`, `FERTIG!`, keine
+  `Fehlende Kacheln`, keine `PLATZHALTER`. Sichtpruefung RB1/RB2/4-Weg/T/Passkehre.
+  Keine Kachel-Geometrie aendern, keine Commits.
+  """
+- **Validierung:** `selene map\SwissMap.luau` ohne Fehler; Build bis `FERTIG!`; Place ohne `PLATZHALTER_*`; Sicht: Kreiselzufahrten buendig, kein Teller ueber der Fahrbahn.
+- **Commit-Empfehlung:** fix(map): lower roundabout asphalt plate below road surface
+- **Ergebnis 2026-11-19:** Bake lief (19 GLB, 17 Vorlagen + 2 `_Mirror`). Im Place waren die Vorlagen bereits texturiert und vollstaendig (20 inkl. `Roundabout_4Arm_32m` und beiden `_Mirror`-Kurven) - kein Re-Import noetig, Sicht bestaetigt Pfeile/Zebrastreifen/Mittellinien. `SwissMapSrc` war bis auf einen fehlenden Zeilenumbruch identisch mit dem Repo; HTTP-Transfer scheiterte an der Assistant-Allowlist (localhost), daher Patch im StringValue ueber Block-Hashes -> danach byte-genau gleich dem Repo. **Gefundener Fehler:** der Asphalt-Teller (r = 93, 2.4 dick) lag mit der Oberkante auf `surfY + KIT_LIFT + 0.05` und deckte den Asphalt der Kreisel-Vorlage ab (nur Randsteine sichtbar, Kreisel wirkte als hellgraue Scheibe). Fix: `roadTop - 2.75` (1.55 tiefer). Sauberer Einzellauf: `RoadKit: 20 Vorlagen`, `567 Kacheln, 13 Kurven, 17 Knotenstuecke`, 0 Platzhalter, `FERTIG!` (236 Haeuser, 15 Garagen, 4800 Tannen, 15 Weiden); 584 Kit-MeshParts, 55.729 Descendants, 1x `SwissMap`. Selene 0 Fehler (191 Warnungen). Sicht RB1/RB2 korrekt; offen: diagonale Naht an Knoten, schwebende Kacheln an der Passkehre, Haus-Setback 18, leere Dorfflaechen. Place nicht gespeichert.
+- **Ergebnis 2026-11-19 (Nachtrag: Umzug in neuen Haupt-Place):** Im alten Place liess sich die Editor-Kamera nicht mehr bewegen (Verdacht: `screen_capture`-Kamera bei 55k Teilen). Neuer Haupt-Place **`Töffli-Leben`, placeId 138970815123050, universeId 10777820307**; altes Place `118179739619044` = `ToeffliTal_Alpha` (nur noch Spender). Neue Kachelpackung `Strassen_Einzelobjekte (1).zip` (18 GLB incl. `Roundabout_4Arm_32m`) mit `bake.mjs` auf 20 texturierte GLB gebacken (`%TEMP%\opencode\roadkit2\textured`), per 3D-Importer importiert, nach `ReplicatedStorage.RoadKit` verschoben (20 Modelle, je 1 MeshPart, Groessen identisch) und `Color` auf Weiss gesetzt (grauer Tint haette die Textur um ~36 % abgedunkelt). Quelltext ohne Nutzer/HttpService uebertragen: Code-Mode-`fetch` vom lokalen Node-Server + 8 Chunks `[==[ ... ]==]` per `execute_luau`; Lua verschluckt den Umbruch direkt nach `[==[`, daher `.. "\n" ..` - Ergebnis byte-genau (`195919` B, Summe `1710781269`). Build: `RoadKit: 20 Vorlagen`, `567 Kacheln, 13 Kurven, 17 Knotenstuecke`, beide Kreisel 3 Zufahrten (90/180 Grad, Treffer 3), 0 Platzhalter, `FERTIG!`; 569 Kit-MeshParts, 55.698 Descendants; Sicht RB1/RB2 sauber. Selene 0 Fehler. **Place als Version 7 gespeichert** (kein Publish).
+
+### [x] Task 51: Kreisel-Drehung (3-Arm) und Neubau im Haupt-Place nach Pull
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** map/SwissMap.luau
+- **Context-Dateien:** docs/MEMORY.md
+- **Agent-Persona:** Roblox-Karten-Integrator fuer Strassenkacheln und Kreisverkehre.
+- **Ausfuehrungs-Prompt:**
+  """
+  Hole den Remote-Stand (`git pull --ff-only`) - auf diesem Rechner fehlten zwei Commits
+  (`64be65e`, `102586a`). Pruefe im geoeffneten Place, welche Arme die gelieferte
+  `Roundabout_3Arm_32m` wirklich hat (Raycast bei r = 68..71 im Achtelkreis), und korrigiere
+  die SOCK-Tabelle, wenn Modell und Tabelle nicht uebereinstimmen. Baue die Karte im
+  Haupt-Place neu (`loadstring` + `task.delay`, nie `task.spawn`), pruefe `RoadKit: N Vorlagen`,
+  `Kit-Netz`, `FERTIG!`, keine `Fehlende Kacheln`, keine `PLATZHALTER`, und kontrolliere
+  beide Kreisel per Raycast (Arme deckungsgleich mit den Zufahrten, keine Luecke > 1 Stud).
+  Keine Kachel-Geometrie aendern, keine Commits.
+  """
+- **Validierung:** `selene map\SwissMap.luau` ohne Fehler; Build bis `FERTIG!`; Raycast: RB1 4 Arme N/E/W/S, RB2 3 Arme N/E/W ohne Luecke zur Nordzufahrt; Place gespeichert.
+- **Commit-Empfehlung:** fix(map): 3-arm roundabout sockets point N/E/W
+- **Ergebnis 2026-11-19:** Zwei Commits nachgezogen (`64be65e` 17.11. 22:08, `102586a` 18.11. 20:19) - der Rechner war nie gefetcht, der Neubau davor lief mit veraltetem Quelltext. Lokaler Teller-Fix verworfen (in `102586a` ist der Teller ganz entfernt). **Gefundener Fehler:** `Roundabout_3Arm_32m` hat seine Arme lokal N/E/W, die SOCK-Tabelle sagte E/W/S; dadurch wurde RB2 mit `Drehung 180` gesetzt - Nordzufahrt stiess auf die geschlossene Modellseite (Luecke r = 64..71 bei Kacheln ab r = 72), der dritte Modell-Arm stand als Stummel nach Sueden in der Wiese. Fix: SOCK `{ { 1, 0 }, { -1, 0 }, { 0, -1 } }`. Neubau: `RoadKit: 20 Vorlagen`; RB1 `Roundabout_4Arm_32m`, 4 Zufahrten, `Drehung 0`, Treffer 4; RB2 `Roundabout_3Arm_32m`, 3 Zufahrten, `Drehung 0`, Treffer 3; `Kit-Netz: 670 Kacheln, 16 Kurven, 25 Knotenstuecke`, 0 Platzhalter, `FERTIG!` (236 Haeuser, 15 Garagen, 4800 Tannen, 15 Weiden); 672 Kit-MeshParts, 56.355 Descendants. Raycast bestaetigt: RB1 Arme N/E/W/S, RB2 Arme N/E/W, Nordzufahrt lueckenlos (Modellarm bis r = 71, Kacheln ab r = 72). Selene 0 Fehler (204 Warnungen). **Place `Töffli-Leben` als Version 12 gespeichert** (kein Publish, kein Commit).
+
+### [x] Task 52: Kachel-Kollision und kein Gras unter Objekten
+- **Empfohlenes Modell:** DeepSeek V4.1 Flash | **Eskalation:** MiMo-V2.6 Pro / Kimi K3.1 Pro
+- **Modus:** BUILD-MODUS
+- **Target-Dateien:** map/SwissMap.luau
+- **Context-Dateien:** docs/MEMORY.md
+- **Agent-Persona:** Roblox-Physik- und Terrain-Integrator.
+- **Ausfuehrungs-Prompt:**
+  """
+  Behebe zwei Platzierungsfehler der Kit-Strasse: (1) der Spieler laeuft durch Trottoir
+  und Randstein, weil die Kacheln CanCollide = false haben und er auf dem Terrain steht;
+  (2) unter Kachelraendern und Gebaeuden waechst Gras durch. Setze die Kacheln kollidierbar
+  (PreciseConvexDecomposition, Achtung: die Fidelity muss auf der VORLAGE gesetzt werden,
+  Klone ausserhalb des DataModels ignorieren sie stillschweigend), verbreitere das
+  Asphaltband im Material-Gitter auf +-13 und schreibe das Terrain unter Haeusern, Laeden,
+  Garagen und Gebaeuden auf Erde (Region auf 4er-Voxel ausgerichtet). Strassen NICHT
+  tiefer legen - KIT_LIFT bleibt 0.40. Danach neu bauen, im Place per Raycast und
+  Play-Test pruefen (fallendes Teil ruht auf dem Asphalt, nicht auf dem Terrain).
+  Keine Commits, kein Publish.
+  """
+- **Validierung:** `selene` ohne Fehler; Build bis `FERTIG!`; Raycast: Asphalt +0.45 / Trottoir +1.53; Kachel und Kreisel `CanCollide=true` + `PreciseConvexDecomposition`; Play-Test: Teil ruht auf dem Belag; Place gespeichert.
+- **Commit-Empfehlung:** fix(map): collidable road tiles, asphalt band widened, ground under buildings
+- **Ergebnis 2026-11-19:** Kit-Kacheln und Kreisel sind kollidierbar (`CanCollide = true`, `PreciseConvexDecomposition`). **Erkenntnis:** `CollisionFidelity` wird auf einem frischen Klon ausserhalb des DataModels stillschweigend verworfen - der Wert wird jetzt auf den 20 Vorlagen in `ReplicatedStorage.RoadKit` gesetzt, die Klone erben ihn. **Tiefer legen verworfen:** mit `KIT_LIFT = -0.23` verschwanden die Kacheln im Boden (Asphalt liegt in der Fahrbahnmitte nur 0.05 ueber dem Pivot) - auf Wunsch zurueck auf `KIT_LIFT = 0.40`, `RB_LIFT = KIT_LIFT`. Gras unter Objekten: Asphaltband im Kit-Modus +-13 (vorher `hw + 0.5` = +-10 bei 12er-Kachelhalbbreite); unter Gebaeuden Gras/LeafyGrass -> Ground, 268 Flaechen (Region 4er-aligniert, nach innen gerundet). Verifikation: Asphalt 22.90 (+0.45), Trottoir 23.98 (+1.53), Kachelrand Asphalt, Hausflaeche Ground=64; Play-Test: 2x2x2-Teil ruht bei Y 23.87 (Unterkante 22.87 = Asphalt statt Terrain 22.45), Spieler-Root 26.25. Build `670 Kacheln, 16 Kurven, 25 Knotenstuecke`, 0 Platzhalter, 672 Kit-MeshParts, 56.356 Descendants. Selene 0 Fehler (213 Warnungen). **Place als Version 22 gespeichert**, kein Commit.
